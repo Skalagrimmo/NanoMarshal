@@ -2,9 +2,15 @@ package com.example.data.repository
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.example.data.database.AppDatabase
+import com.example.data.database.WeaponInventoryEntity
 import com.example.data.model.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 data class PlayerProfile(
     val credits: Int = 2000,
@@ -20,6 +26,19 @@ data class PlayerProfile(
 
 class GameRepository(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("nanomarshal_prefs", Context.MODE_PRIVATE)
+    private val database = AppDatabase.getInstance(context)
+    private val inventoryDao = database.weaponInventoryDao()
+    private val repositoryScope = CoroutineScope(Dispatchers.IO)
+
+    val weaponInventoryFlow: Flow<List<WeaponInventoryEntity>> = inventoryDao.getInventoryFlow()
+
+    init {
+        repositoryScope.launch {
+            if (inventoryDao.getCount() == 0) {
+                inventoryDao.insertAll(AppDatabase.DEFAULT_INVENTORY)
+            }
+        }
+    }
 
     private val _profile = MutableStateFlow(loadProfile())
     val profile: StateFlow<PlayerProfile> = _profile
@@ -65,6 +84,9 @@ class GameRepository(context: Context) {
         if (curr.credits >= weapon.cost && !curr.unlockedWeaponIds.contains(weapon.id)) {
             val newWeapons = curr.unlockedWeaponIds + weapon.id
             saveProfile(curr.copy(credits = curr.credits - weapon.cost, unlockedWeaponIds = newWeapons))
+            repositoryScope.launch {
+                inventoryDao.unlockWeapon(weapon.id)
+            }
             return true
         }
         return false
@@ -80,6 +102,49 @@ class GameRepository(context: Context) {
         return false
     }
 
+    fun buyAmmoRefill(weaponId: String, costCredits: Int): Boolean {
+        val curr = _profile.value
+        if (curr.credits >= costCredits) {
+            saveProfile(curr.copy(credits = curr.credits - costCredits))
+            repositoryScope.launch {
+                val item = inventoryDao.getWeaponById(weaponId)
+                if (item != null) {
+                    val newReserve = (item.reserveAmmo + item.maxReserveAmmo / 2).coerceAtMost(item.maxReserveAmmo)
+                    inventoryDao.updateReserveAmmo(weaponId, newReserve)
+                }
+            }
+            return true
+        }
+        return false
+    }
+
+    fun upgradeWeaponLevel(weaponId: String, costCores: Int): Boolean {
+        val curr = _profile.value
+        if (curr.naniteCores >= costCores) {
+            saveProfile(curr.copy(naniteCores = curr.naniteCores - costCores))
+            repositoryScope.launch {
+                val item = inventoryDao.getWeaponById(weaponId)
+                if (item != null) {
+                    val nextLevel = item.upgradeLevel + 1
+                    val newDamage = (item.damage * 1.25f).toInt()
+                    inventoryDao.upgradeWeapon(weaponId, nextLevel, newDamage)
+                }
+            }
+            return true
+        }
+        return false
+    }
+
+    fun updateWeaponAmmoState(weaponId: String, currentMag: Int, reserveAmmo: Int) {
+        repositoryScope.launch {
+            inventoryDao.updateAmmo(weaponId, currentMag, reserveAmmo)
+        }
+    }
+
+    suspend fun getInventoryList(): List<WeaponInventoryEntity> {
+        return inventoryDao.getInventoryList()
+    }
+
     fun recordMissionVictory(missionId: String, stars: Int, creditsEarned: Int, coresEarned: Int) {
         val curr = _profile.value
         val newCompleted = curr.completedMissionIds + missionId
@@ -92,5 +157,16 @@ class GameRepository(context: Context) {
                 missionStars = newStars
             )
         )
+        // Bonus ammo refill for all unlocked weapons upon mission victory
+        repositoryScope.launch {
+            val items = inventoryDao.getInventoryList()
+            for (item in items) {
+                if (item.isUnlocked) {
+                    val restored = (item.reserveAmmo + item.maxReserveAmmo / 2).coerceAtMost(item.maxReserveAmmo)
+                    inventoryDao.updateReserveAmmo(item.id, restored)
+                }
+            }
+        }
     }
 }
+
