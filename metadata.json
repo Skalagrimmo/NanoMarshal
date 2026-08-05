@@ -1,0 +1,6 @@
+{
+  "name": "NanoMarshal",
+  "description": "Top-down tactical cover shooter in a nanopunk alien setting with procedural voxel landscapes, destructible environments, and adaptive enemy AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
