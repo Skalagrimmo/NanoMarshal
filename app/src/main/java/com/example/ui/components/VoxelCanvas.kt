@@ -21,10 +21,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.*
 import com.example.engine.GameState
+import com.example.engine.VoxelMaterialShader
 import com.example.engine.VoxelTerrain
 import com.example.ui.theme.*
-import kotlin.math.cos
-import kotlin.math.sin
+import kotlin.math.*
 import kotlin.random.Random
 
 @Composable
@@ -69,7 +69,8 @@ fun VoxelCanvas(
                 playerX = player.x,
                 playerY = player.y,
                 isTacticalOverlayEnabled = gameState.isTacticalGridOverlayEnabled,
-                textMeasurer = textMeasurer
+                textMeasurer = textMeasurer,
+                dynamicLights = gameState.dynamicLights
             )
 
             // 1b. Render Tactical Line-of-Sight & Flanking combat overlay rays
@@ -130,6 +131,33 @@ fun VoxelCanvas(
                     center = Offset(enemy.x, enemy.y)
                 )
 
+                // Enemy Cover Snap Field
+                if (enemy.isCoverSnapped) {
+                    val nx = enemy.coverSnapNormalX
+                    val ny = enemy.coverSnapNormalY
+                    val tangentX = -ny
+                    val tangentY = nx
+
+                    val contactStartX = enemy.x - nx * 4f + tangentX * 16f
+                    val contactStartY = enemy.y - ny * 4f + tangentY * 16f
+                    val contactEndX = enemy.x - nx * 4f - tangentX * 16f
+                    val contactEndY = enemy.y - ny * 4f - tangentY * 16f
+
+                    drawLine(
+                        color = ShieldBlue,
+                        start = Offset(contactStartX, contactStartY),
+                        end = Offset(contactEndX, contactEndY),
+                        strokeWidth = 3.5f
+                    )
+
+                    drawCircle(
+                        color = ShieldBlue,
+                        radius = 19f,
+                        center = Offset(enemy.x, enemy.y),
+                        style = Stroke(width = 1.8f)
+                    )
+                }
+
                 // Facing Direction Pointer
                 drawLine(
                     color = Color.White,
@@ -164,16 +192,49 @@ fun VoxelCanvas(
                     size = Size(36f * hpPct, 5f)
                 )
 
-                // AI Alert Icon
+                // AI State Tag & Alert
                 if (enemy.state != AIState.PATROL) {
-                    val alertText = if (enemy.state == AIState.ENGAGED || enemy.state == AIState.FLANKING) "!" else "?"
-                    val alertColor = if (alertText == "!") LaserRed else HazardYellow
+                    val stateTag = when (enemy.state) {
+                        AIState.FLANKING -> "FLANK"
+                        AIState.SEEKING_COVER -> "COVER"
+                        AIState.ENGAGED -> "ENGAGE"
+                        AIState.RETREAT -> "RETREAT"
+                        AIState.SUSPICIOUS, AIState.INVESTIGATING -> "ALERT"
+                        else -> "!"
+                    }
+                    val alertColor = when (enemy.state) {
+                        AIState.FLANKING -> PlasmaPink
+                        AIState.SEEKING_COVER -> ShieldBlue
+                        AIState.ENGAGED -> LaserRed
+                        AIState.RETREAT -> HazardYellow
+                        else -> HazardYellow
+                    }
                     drawText(
                         textMeasurer = textMeasurer,
-                        text = alertText,
-                        style = TextStyle(color = alertColor, fontSize = 16.sp),
-                        topLeft = Offset(enemy.x - 4f, enemy.y - 48f)
+                        text = "[$stateTag]",
+                        style = TextStyle(color = alertColor, fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                        topLeft = Offset(enemy.x - 22f, enemy.y - 42f)
                     )
+                }
+
+                // Render active tactical navigation path waypoints if tactical overlay enabled or flanking
+                if (gameState.isTacticalGridOverlayEnabled && enemy.activePath.isNotEmpty()) {
+                    var prevPt = Offset(enemy.x, enemy.y)
+                    for (idx in enemy.activePathIndex until enemy.activePath.size) {
+                        val pt = Offset(enemy.activePath[idx].first, enemy.activePath[idx].second)
+                        drawLine(
+                            color = PlasmaPink.copy(alpha = 0.55f),
+                            start = prevPt,
+                            end = pt,
+                            strokeWidth = 2f
+                        )
+                        drawCircle(
+                            color = PlasmaPink.copy(alpha = 0.7f),
+                            radius = 3f,
+                            center = pt
+                        )
+                        prevPt = pt
+                    }
                 }
             }
 
@@ -206,21 +267,67 @@ fun VoxelCanvas(
 
             // 6. Render Particles & Floating Damage Numbers
             for (p in gameState.particles) {
-                if (p.type == ParticleType.HIT_NUMBER) {
-                    drawText(
-                        textMeasurer = textMeasurer,
-                        text = p.text,
-                        style = TextStyle(color = p.color.copy(alpha = p.life), fontSize = 14.sp),
-                        topLeft = Offset(p.x, p.y)
-                    )
-                } else {
-                    drawCircle(
-                        color = p.color.copy(alpha = p.life),
-                        radius = p.size * p.life,
-                        center = Offset(p.x, p.y)
-                    )
+                when (p.type) {
+                    ParticleType.HIT_NUMBER -> {
+                        drawText(
+                            textMeasurer = textMeasurer,
+                            text = p.text,
+                            style = TextStyle(color = p.color.copy(alpha = p.life), fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                            topLeft = Offset(p.x, p.y)
+                        )
+                    }
+                    ParticleType.DEBRIS_VOXEL -> {
+                        // Flying tumbling voxel block chunk
+                        withTransform({
+                            translate(left = p.x, top = p.y)
+                            rotate(degrees = p.rotation, pivot = Offset.Zero)
+                        }) {
+                            val w = p.size * p.aspectRatio
+                            val h = p.size
+                            drawRoundRect(
+                                color = p.color.copy(alpha = p.life),
+                                topLeft = Offset(-w / 2f, -h / 2f),
+                                size = Size(w, h),
+                                cornerRadius = CornerRadius(2f)
+                            )
+                            drawRoundRect(
+                                color = Color.White.copy(alpha = p.life * 0.6f),
+                                topLeft = Offset(-w / 2f, -h / 2f),
+                                size = Size(w, h),
+                                cornerRadius = CornerRadius(2f),
+                                style = Stroke(width = 1f)
+                            )
+                        }
+                    }
+                    ParticleType.PLASMA_SPARK -> {
+                        // High-speed energy spark streak
+                        drawLine(
+                            color = p.color.copy(alpha = p.life),
+                            start = Offset(p.x, p.y),
+                            end = Offset(p.x - p.vx * 0.035f, p.y - p.vy * 0.035f),
+                            strokeWidth = 2.5f
+                        )
+                    }
+                    ParticleType.SMOKE_NANO -> {
+                        // Soft expanding particulate dust cloud
+                        drawCircle(
+                            color = p.color.copy(alpha = (p.life * 0.35f).coerceIn(0f, 1f)),
+                            radius = p.size,
+                            center = Offset(p.x, p.y)
+                        )
+                    }
+                    else -> {
+                        drawCircle(
+                            color = p.color.copy(alpha = p.life),
+                            radius = p.size * p.life,
+                            center = Offset(p.x, p.y)
+                        )
+                    }
                 }
             }
+
+            // 7. Render Real-Time Dynamic Light Bloom & Explosion Shockwave Pass
+            drawDynamicLightBloomPass(gameState.dynamicLights)
 
             // 7. Render Player Character
             if (player.isAlive) {
@@ -234,6 +341,48 @@ fun VoxelCanvas(
                     strokeWidth = 2f
                 )
 
+                // Cover Snap Surface Contact Bar & Barrier Shield Arc
+                if (player.isCoverSnapped) {
+                    val nx = player.coverSnapNormalX
+                    val ny = player.coverSnapNormalY
+                    val tangentX = -ny
+                    val tangentY = nx
+
+                    // Contact Beam flush on voxel face
+                    val contactStartX = player.x - nx * 4f + tangentX * 18f
+                    val contactStartY = player.y - ny * 4f + tangentY * 18f
+                    val contactEndX = player.x - nx * 4f - tangentX * 18f
+                    val contactEndY = player.y - ny * 4f - tangentY * 18f
+
+                    drawLine(
+                        color = NaniteGreen,
+                        start = Offset(contactStartX, contactStartY),
+                        end = Offset(contactEndX, contactEndY),
+                        strokeWidth = 4f
+                    )
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.8f),
+                        start = Offset(contactStartX, contactStartY),
+                        end = Offset(contactEndX, contactEndY),
+                        strokeWidth = 2f
+                    )
+
+                    // Defensive Barrier Arc facing away from obstacle face
+                    val awayAngleRad = atan2(-ny, -nx)
+                    val awayAngleDeg = Math.toDegrees(awayAngleRad.toDouble()).toFloat()
+                    val pulseAlpha = 0.6f + sin(player.coverAnimPulse.toDouble()).toFloat() * 0.25f
+
+                    drawArc(
+                        color = NaniteGreen.copy(alpha = pulseAlpha),
+                        startAngle = awayAngleDeg - 60f,
+                        sweepAngle = 120f,
+                        useCenter = false,
+                        topLeft = Offset(player.x - 24f, player.y - 24f),
+                        size = Size(48f, 48f),
+                        style = Stroke(width = 3.5f)
+                    )
+                }
+
                 // Player Body
                 val playerColor = when (player.stance) {
                     PlayerStance.STAND -> NanoCyan
@@ -246,6 +395,14 @@ fun VoxelCanvas(
                     radius = if (player.stance == PlayerStance.PRONE) 12f else 18f,
                     center = Offset(player.x, player.y)
                 )
+                if (player.isCoverSnapped) {
+                    drawCircle(
+                        color = NaniteGreen,
+                        radius = 21f,
+                        center = Offset(player.x, player.y),
+                        style = Stroke(width = 2f)
+                    )
+                }
                 drawCircle(
                     color = Color.White,
                     radius = 6f,
@@ -262,16 +419,34 @@ fun VoxelCanvas(
 
                 // Cover Indicator Badge
                 if (player.isBehindCover) {
-                    val coverTxt = if (player.coverHeight == CoverHeight.HIGH) "HIGH COVER (90%)" else "LOW COVER (50%)"
-                    drawText(
+                    val coverTxt = if (player.isCoverSnapped) {
+                        "COVER LOCKED (${if (player.coverHeight == CoverHeight.HIGH) "90%" else "50%"})"
+                    } else {
+                        if (player.coverHeight == CoverHeight.HIGH) "HIGH COVER (90%)" else "LOW COVER (50%)"
+                    }
+                    val badgeColor = if (player.isCoverSnapped) NaniteGreen else NanoCyan
+                    drawSafeText(
                         textMeasurer = textMeasurer,
                         text = coverTxt,
-                        style = TextStyle(color = NaniteGreen, fontSize = 11.sp),
-                        topLeft = Offset(player.x - 35f, player.y - 36f)
+                        style = TextStyle(color = badgeColor, fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                        topLeft = Offset(player.x - 42f, player.y - 38f)
                     )
                 }
+
+                // 8. Render World-Space Objective Zones, Terminal Rings & Beacons
+                drawWorldObjectiveOverlays(gameState = gameState, textMeasurer = textMeasurer)
             }
         }
+
+        // 9. Screen-Space Offscreen Objective Waypoint Directional Indicators
+        drawOffscreenObjectiveWaypoints(
+            gameState = gameState,
+            cameraX = cameraX,
+            cameraY = cameraY,
+            canvasWidth = canvasWidth,
+            canvasHeight = canvasHeight,
+            textMeasurer = textMeasurer
+        )
     }
 }
 
@@ -284,7 +459,8 @@ private fun DrawScope.drawTerrainGrid(
     playerX: Float,
     playerY: Float,
     isTacticalOverlayEnabled: Boolean,
-    textMeasurer: androidx.compose.ui.text.TextMeasurer
+    textMeasurer: androidx.compose.ui.text.TextMeasurer,
+    dynamicLights: List<DynamicLight> = emptyList()
 ) {
     val startGx = (cameraX / terrain.tileSize).toInt().coerceIn(0, terrain.width - 1)
     val endGx = ((cameraX + canvasWidth) / terrain.tileSize).toInt().coerceAtMost(terrain.width - 1)
@@ -310,12 +486,54 @@ private fun DrawScope.drawTerrainGrid(
                 hasLineOfSight(playerX, playerY, tileCenterX, tileCenterY, terrain)
             } else false
 
+            // Real-time Dynamic Lighting Accumulation for current Voxel Tile
+            var addR = 0f
+            var addG = 0f
+            var addB = 0f
+            var totalLightIntensity = 0f
+            var lightDirX = 0f
+            var lightDirY = 0f
+            var maxLightFalloff = 0f
+
+            for (light in dynamicLights) {
+                val lx = tileCenterX - light.x
+                val ly = tileCenterY - light.y
+                val distSq = lx * lx + ly * ly
+                val radSq = light.radius * light.radius
+                if (distSq < radSq) {
+                    val dist = sqrt(distSq)
+                    val normDist = (1.0f - dist / light.radius).coerceIn(0f, 1f)
+                    val falloff = normDist * normDist * light.intensity
+                    if (falloff > 0.005f) {
+                        addR += light.color.red * falloff
+                        addG += light.color.green * falloff
+                        addB += light.color.blue * falloff
+                        totalLightIntensity += falloff
+
+                        if (falloff > maxLightFalloff && dist > 0.1f) {
+                            maxLightFalloff = falloff
+                            lightDirX = -lx / dist
+                            lightDirY = -ly / dist
+                        }
+                    }
+                }
+            }
+
             // Base Floor Color
-            val floorColor = when (tile.type) {
+            val baseFloorColor = when (tile.type) {
                 VoxelType.FLOOR_PLAZA -> SlateCard
                 VoxelType.ACID_POOL -> Color(0xFF052E16)
                 else -> VoidDark
             }
+
+            val floorColor = if (totalLightIntensity > 0f) {
+                Color(
+                    red = (baseFloorColor.red + addR * 0.65f).coerceIn(0f, 1f),
+                    green = (baseFloorColor.green + addG * 0.65f).coerceIn(0f, 1f),
+                    blue = (baseFloorColor.blue + addB * 0.65f).coerceIn(0f, 1f),
+                    alpha = baseFloorColor.alpha
+                )
+            } else baseFloorColor
 
             drawRoundRect(
                 color = floorColor,
@@ -323,6 +541,20 @@ private fun DrawScope.drawTerrainGrid(
                 size = Size(terrain.tileSize - 2f, terrain.tileSize - 2f),
                 cornerRadius = CornerRadius(4f)
             )
+
+            // Dynamic Light Floor Inner Glow Overlay
+            if (totalLightIntensity > 0.04f) {
+                drawRoundRect(
+                    color = Color(
+                        red = addR.coerceIn(0f, 1f),
+                        green = addG.coerceIn(0f, 1f),
+                        blue = addB.coerceIn(0f, 1f)
+                    ).copy(alpha = (totalLightIntensity * 0.35f).coerceAtMost(0.6f)),
+                    topLeft = Offset(worldX + 2f, worldY + 2f),
+                    size = Size(terrain.tileSize - 4f, terrain.tileSize - 4f),
+                    cornerRadius = CornerRadius(4f)
+                )
+            }
 
             // Dynamic Tactical Grid Overlay
             if (isTacticalOverlayEnabled) {
@@ -382,9 +614,9 @@ private fun DrawScope.drawTerrainGrid(
                 )
             }
 
-            // Voxel Elevation Blocks (LOD rendering)
+            // Voxel Elevation Blocks (LOD rendering with Dynamic Lighting, Mesh Deformation & Fractures)
             if (tile.coverHeight != CoverHeight.NONE && !tile.isDisintegrated) {
-                val blockColor = when (tile.type) {
+                val baseBlockColor = when (tile.type) {
                     VoxelType.LOW_COVER_CRATE -> Color(0xFF1E293B)
                     VoxelType.HIGH_COVER_WALL -> Color(0xFF0F172A)
                     VoxelType.EXPLOSIVE_BARREL -> Color(0xFF7F1D1D)
@@ -394,6 +626,15 @@ private fun DrawScope.drawTerrainGrid(
                     else -> SlateCard
                 }
 
+                val blockColor = if (totalLightIntensity > 0f) {
+                    Color(
+                        red = (baseBlockColor.red + addR * 0.75f).coerceIn(0f, 1f),
+                        green = (baseBlockColor.green + addG * 0.75f).coerceIn(0f, 1f),
+                        blue = (baseBlockColor.blue + addB * 0.75f).coerceIn(0f, 1f),
+                        alpha = baseBlockColor.alpha
+                    )
+                } else baseBlockColor
+
                 val strokeColor = when (tile.type) {
                     VoxelType.EXPLOSIVE_BARREL -> HazardYellow
                     VoxelType.ENERGY_BARRIER -> NanoCyan
@@ -402,23 +643,130 @@ private fun DrawScope.drawTerrainGrid(
                 }
 
                 val heightOffset = tile.elevationZ * 12f
+                val blockCenterX = worldX + terrain.tileSize / 2f + (if (tile.lodLevel == 0) tile.deformationX else 0f)
+                val blockCenterY = worldY + terrain.tileSize / 2f + (if (tile.lodLevel == 0) tile.deformationY else 0f) - heightOffset
 
-                // Top Face of Voxel Block
-                drawRoundRect(
-                    color = blockColor,
-                    topLeft = Offset(worldX + 4f, worldY + 4f - heightOffset),
-                    size = Size(terrain.tileSize - 8f, terrain.tileSize - 8f),
-                    cornerRadius = CornerRadius(6f)
-                )
+                val blockW = terrain.tileSize - 8f
+                val blockH = terrain.tileSize - 8f
+                val halfW = blockW / 2f
+                val halfH = blockH / 2f
 
-                // Neon Outline Bevel
-                drawRoundRect(
-                    color = strokeColor,
-                    topLeft = Offset(worldX + 4f, worldY + 4f - heightOffset),
-                    size = Size(terrain.tileSize - 8f, terrain.tileSize - 8f),
-                    cornerRadius = CornerRadius(6f),
-                    style = Stroke(width = 2f)
-                )
+                when (tile.lodLevel) {
+                    0 -> {
+                        // LOD 0 (Ultra Detail): Shader Material Strategy, Dynamic Lighting, Deformation, Cracks, Hit Flash, Matrix Transforms
+                        withTransform({
+                            translate(left = blockCenterX, top = blockCenterY)
+                            rotate(degrees = Math.toDegrees(tile.rotationAngle.toDouble()).toFloat(), pivot = Offset.Zero)
+                            scale(scaleX = tile.meshScaleX, scaleY = tile.meshScaleY, pivot = Offset.Zero)
+                        }) {
+                            // Render Shader-based Material Surface (Metal, Concrete, Alien Biomass, Energy Plasma, Volatile Hazard)
+                            VoxelMaterialShader.drawBlockShader(
+                                drawScope = this,
+                                halfW = halfW,
+                                halfH = halfH,
+                                tile = tile,
+                                lightIntensity = totalLightIntensity,
+                                lightDirX = lightDirX,
+                                lightDirY = lightDirY,
+                                addR = addR,
+                                addG = addG,
+                                addB = addB
+                            )
+
+                            // Damage Fracture Crack Lines
+                            if (tile.damageCracksCount > 0) {
+                                val crackColor = HazardYellow.copy(alpha = 0.85f)
+                                val numCracks = tile.damageCracksCount.coerceAtMost(5)
+                                for (c in 0 until numCracks) {
+                                    val startX = (-halfW + 8f + c * 10f).coerceIn(-halfW, halfW)
+                                    val startY = -halfH + 4f
+                                    val midX = startX + if (c % 2 == 0) 10f else -8f
+                                    val midY = 0f
+                                    val endX = startX + if (c % 3 == 0) -6f else 12f
+                                    val endY = halfH - 4f
+
+                                    drawLine(crackColor, Offset(startX, startY), Offset(midX, midY), strokeWidth = 1.8f)
+                                    drawLine(crackColor, Offset(midX, midY), Offset(endX, endY), strokeWidth = 1.2f)
+                                }
+                            }
+
+                            // Impact Hit Flash Glow Overlay
+                            if (tile.hitFlashTimer > 0f) {
+                                drawRoundRect(
+                                    color = Color.White.copy(alpha = tile.hitFlashTimer * 0.65f),
+                                    topLeft = Offset(-halfW, -halfH),
+                                    size = Size(blockW, blockH),
+                                    cornerRadius = CornerRadius(6f)
+                                )
+                                drawRoundRect(
+                                    color = NanoCyan.copy(alpha = tile.hitFlashTimer),
+                                    topLeft = Offset(-halfW, -halfH),
+                                    size = Size(blockW, blockH),
+                                    cornerRadius = CornerRadius(6f),
+                                    style = Stroke(width = 3.5f)
+                                )
+                            }
+
+                            // HP Bar if damaged
+                            if (tile.currentHp < tile.maxHp) {
+                                val hpPct = (tile.currentHp / tile.maxHp).coerceIn(0f, 1f)
+                                drawRect(
+                                    color = Color.Black,
+                                    topLeft = Offset(-halfW + 4f, -halfH + 4f),
+                                    size = Size(blockW - 8f, 4f)
+                                )
+                                drawRect(
+                                    color = HazardYellow,
+                                    topLeft = Offset(-halfW + 4f, -halfH + 4f),
+                                    size = Size((blockW - 8f) * hpPct, 4f)
+                                )
+                            }
+                        }
+                    }
+                    1 -> {
+                        // LOD 1 (Medium Detail): Standard voxel bevels & HP bar
+                        drawRoundRect(
+                            color = blockColor,
+                            topLeft = Offset(worldX + 4f, worldY + 4f - heightOffset),
+                            size = Size(blockW, blockH),
+                            cornerRadius = CornerRadius(4f)
+                        )
+                        drawRoundRect(
+                            color = strokeColor,
+                            topLeft = Offset(worldX + 4f, worldY + 4f - heightOffset),
+                            size = Size(blockW, blockH),
+                            cornerRadius = CornerRadius(4f),
+                            style = Stroke(width = 1.5f)
+                        )
+                        if (tile.currentHp < tile.maxHp) {
+                            val hpPct = (tile.currentHp / tile.maxHp).coerceIn(0f, 1f)
+                            drawRect(
+                                color = Color.Black,
+                                topLeft = Offset(worldX + 6f, worldY + 6f - heightOffset),
+                                size = Size(terrain.tileSize - 12f, 3f)
+                            )
+                            drawRect(
+                                color = HazardYellow,
+                                topLeft = Offset(worldX + 6f, worldY + 6f - heightOffset),
+                                size = Size((terrain.tileSize - 12f) * hpPct, 3f)
+                            )
+                        }
+                    }
+                    else -> {
+                        // LOD 2 (Macro SVDAG Detail): Condensed fast-rendering quad representation
+                        drawRect(
+                            color = blockColor.copy(alpha = 0.85f),
+                            topLeft = Offset(worldX + 2f, worldY + 2f - heightOffset),
+                            size = Size(terrain.tileSize - 4f, terrain.tileSize - 4f)
+                        )
+                        drawRect(
+                            color = strokeColor.copy(alpha = 0.5f),
+                            topLeft = Offset(worldX + 2f, worldY + 2f - heightOffset),
+                            size = Size(terrain.tileSize - 4f, terrain.tileSize - 4f),
+                            style = Stroke(width = 1f)
+                        )
+                    }
+                }
 
                 // Cover Effectiveness Badge on Tile Block
                 if (isTacticalOverlayEnabled && hasLoS) {
@@ -454,21 +802,6 @@ private fun DrawScope.drawTerrainGrid(
                             topLeft = Offset(worldX + 10f, worldY + 9f - heightOffset)
                         )
                     }
-                }
-
-                // HP Bar if damaged
-                if (tile.currentHp < tile.maxHp) {
-                    val hpPct = (tile.currentHp / tile.maxHp).coerceIn(0f, 1f)
-                    drawRect(
-                        color = Color.Black,
-                        topLeft = Offset(worldX + 6f, worldY + 6f - heightOffset),
-                        size = Size(terrain.tileSize - 12f, 4f)
-                    )
-                    drawRect(
-                        color = HazardYellow,
-                        topLeft = Offset(worldX + 6f, worldY + 6f - heightOffset),
-                        size = Size((terrain.tileSize - 12f) * hpPct, 4f)
-                    )
                 }
             }
         }
@@ -594,4 +927,306 @@ private fun DrawScope.drawVisionCone(
         close()
     }
     drawPath(path = path, color = color)
+}
+
+private fun DrawScope.drawDynamicLightBloomPass(dynamicLights: List<DynamicLight>) {
+    for (light in dynamicLights) {
+        if (light.intensity <= 0.01f || light.radius <= 1f) continue
+
+        when (light.type) {
+            DynamicLightType.EXPLOSION_BURST -> {
+                val pulseAlpha = (light.life * 0.85f).coerceIn(0f, 0.95f)
+                // Expanding shockwave ring
+                drawCircle(
+                    color = light.color.copy(alpha = pulseAlpha),
+                    radius = light.radius,
+                    center = Offset(light.x, light.y),
+                    style = Stroke(width = (10f * light.life + 3f))
+                )
+                // White-hot shockwave rim
+                drawCircle(
+                    color = Color.White.copy(alpha = (light.life * 0.7f).coerceIn(0f, 0.9f)),
+                    radius = (light.radius * 0.85f).coerceAtLeast(2f),
+                    center = Offset(light.x, light.y),
+                    style = Stroke(width = (5f * light.life + 1.5f))
+                )
+                // Explosion thermal core bloom
+                drawCircle(
+                    color = light.color.copy(alpha = (light.life * 0.4f).coerceIn(0f, 0.6f)),
+                    radius = light.radius * 0.45f,
+                    center = Offset(light.x, light.y)
+                )
+                drawCircle(
+                    color = Color.White.copy(alpha = (light.life * 0.8f).coerceIn(0f, 0.9f)),
+                    radius = light.radius * 0.2f,
+                    center = Offset(light.x, light.y)
+                )
+            }
+            DynamicLightType.IMPACT_FLASH, DynamicLightType.MUZZLE_FLASH -> {
+                drawCircle(
+                    color = light.color.copy(alpha = (light.life * 0.5f).coerceIn(0f, 0.7f)),
+                    radius = light.radius * 0.65f,
+                    center = Offset(light.x, light.y)
+                )
+                drawCircle(
+                    color = Color.White.copy(alpha = (light.life * 0.8f).coerceIn(0f, 0.9f)),
+                    radius = light.radius * 0.3f,
+                    center = Offset(light.x, light.y)
+                )
+            }
+            DynamicLightType.PROJECTILE_BULLET -> {
+                drawCircle(
+                    color = light.color.copy(alpha = 0.25f),
+                    radius = light.radius * 0.7f,
+                    center = Offset(light.x, light.y)
+                )
+            }
+            DynamicLightType.ENVIRONMENTAL_EMITTER -> {
+                drawCircle(
+                    color = light.color.copy(alpha = 0.18f * light.intensity),
+                    radius = light.radius * 0.85f,
+                    center = Offset(light.x, light.y)
+                )
+                drawCircle(
+                    color = light.color.copy(alpha = 0.35f * light.intensity),
+                    radius = light.radius * 0.35f,
+                    center = Offset(light.x, light.y)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Renders world-space objective overlays including defense zone perimeters,
+ * terminal health progress rings, pulsing beacons, and target badges.
+ */
+private fun DrawScope.drawWorldObjectiveOverlays(
+    gameState: GameState,
+    textMeasurer: androidx.compose.ui.text.TextMeasurer
+) {
+    val now = gameState.missionTimeMs
+    val pulseFactor = (sin(now / 220.0) * 0.5 + 0.5).toFloat()
+
+    for (obj in gameState.objectives) {
+        if (obj.status == ObjectiveStatus.COMPLETED || obj.status == ObjectiveStatus.FAILED) continue
+        val tx = obj.targetWorldX ?: continue
+        val ty = obj.targetWorldY ?: continue
+
+        val primaryColor = if (obj.isPrimary) NanoCyan else HazardYellow
+
+        when (obj.category) {
+            ObjectiveCategory.DEFEND_TERMINAL -> {
+                // 1. Pulsing Defense Zone Ground Ring
+                val zoneRadius = obj.targetRadiusWorld
+                drawCircle(
+                    color = primaryColor.copy(alpha = 0.08f + pulseFactor * 0.06f),
+                    radius = zoneRadius,
+                    center = Offset(tx, ty)
+                )
+                drawCircle(
+                    color = primaryColor.copy(alpha = 0.45f + pulseFactor * 0.35f),
+                    radius = zoneRadius,
+                    center = Offset(tx, ty),
+                    style = Stroke(width = 2.5f)
+                )
+
+                // 2. Terminal Health & Timer Arc Rings
+                val terminalHp = obj.terminalHpRatio
+                val timerProgress = obj.timerProgressRatio
+
+                drawArc(
+                    color = NaniteGreen,
+                    startAngle = -90f,
+                    sweepAngle = 360f * terminalHp,
+                    useCenter = false,
+                    topLeft = Offset(tx - 36f, ty - 36f),
+                    size = Size(72f, 72f),
+                    style = Stroke(width = 4.5f)
+                )
+                drawArc(
+                    color = primaryColor,
+                    startAngle = -90f,
+                    sweepAngle = 360f * timerProgress,
+                    useCenter = false,
+                    topLeft = Offset(tx - 44f, ty - 44f),
+                    size = Size(88f, 88f),
+                    style = Stroke(width = 3.0f)
+                )
+
+                // Central Beacon Ring
+                drawCircle(
+                    color = primaryColor,
+                    radius = 16f + pulseFactor * 4f,
+                    center = Offset(tx, ty),
+                    style = Stroke(width = 2f)
+                )
+
+                // Objective Badge Label
+                val timerSec = obj.timerRemainingSec?.toInt() ?: 0
+                val hpPct = (terminalHp * 100).toInt()
+                val badgeLabel = "[DEFEND TERMINAL] ${timerSec}s (${hpPct}% HP)"
+
+                drawSafeText(
+                    textMeasurer = textMeasurer,
+                    text = badgeLabel,
+                    style = TextStyle(color = primaryColor, fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                    topLeft = Offset(tx - 70f, ty - 65f)
+                )
+            }
+
+            ObjectiveCategory.SABOTAGE_POWER_CORE -> {
+                // Core Pulsing Zone
+                drawCircle(
+                    color = PlasmaPink.copy(alpha = 0.15f + pulseFactor * 0.10f),
+                    radius = 80f,
+                    center = Offset(tx, ty)
+                )
+                drawCircle(
+                    color = PlasmaPink.copy(alpha = 0.6f + pulseFactor * 0.3f),
+                    radius = 80f,
+                    center = Offset(tx, ty),
+                    style = Stroke(width = 3f)
+                )
+
+                drawSafeText(
+                    textMeasurer = textMeasurer,
+                    text = "🎯 [POWER CORE]",
+                    style = TextStyle(color = PlasmaPink, fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                    topLeft = Offset(tx - 45f, ty - 42f)
+                )
+            }
+
+            ObjectiveCategory.ELIMINATE_BOUNTY -> {
+                // Target Locking Reticle on Warlord
+                drawCircle(
+                    color = LaserRed.copy(alpha = 0.4f + pulseFactor * 0.4f),
+                    radius = 32f + pulseFactor * 8f,
+                    center = Offset(tx, ty),
+                    style = Stroke(width = 2.5f)
+                )
+                drawLine(
+                    color = LaserRed,
+                    start = Offset(tx - 42f, ty),
+                    end = Offset(tx + 42f, ty),
+                    strokeWidth = 1.5f
+                )
+                drawLine(
+                    color = LaserRed,
+                    start = Offset(tx, ty - 42f),
+                    end = Offset(tx, ty + 42f),
+                    strokeWidth = 1.5f
+                )
+
+                drawSafeText(
+                    textMeasurer = textMeasurer,
+                    text = "☠ [BOUNTY TARGET]",
+                    style = TextStyle(color = LaserRed, fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                    topLeft = Offset(tx - 55f, ty - 56f)
+                )
+            }
+
+            else -> {
+                // Generic Waypoint Beacon
+                drawCircle(
+                    color = primaryColor.copy(alpha = 0.3f + pulseFactor * 0.3f),
+                    radius = 24f + pulseFactor * 6f,
+                    center = Offset(tx, ty),
+                    style = Stroke(width = 2f)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Renders directional waypoint indicators along canvas edges for active objectives
+ * located off-screen relative to camera view.
+ */
+private fun DrawScope.drawOffscreenObjectiveWaypoints(
+    gameState: GameState,
+    cameraX: Float,
+    cameraY: Float,
+    canvasWidth: Float,
+    canvasHeight: Float,
+    textMeasurer: androidx.compose.ui.text.TextMeasurer
+) {
+    val player = gameState.player
+
+    for (obj in gameState.objectives) {
+        if (obj.status == ObjectiveStatus.COMPLETED || obj.status == ObjectiveStatus.FAILED) continue
+        val tx = obj.targetWorldX ?: continue
+        val ty = obj.targetWorldY ?: continue
+
+        // Convert world target to screen space
+        val targetScreenX = tx - cameraX
+        val targetScreenY = ty - cameraY
+
+        val margin = 50f
+        val isOffscreen = targetScreenX < margin || targetScreenX > (canvasWidth - margin) ||
+                targetScreenY < margin || targetScreenY > (canvasHeight - margin)
+
+        if (isOffscreen) {
+            val screenCenterX = canvasWidth / 2f
+            val screenCenterY = canvasHeight / 2f
+
+            val dx = targetScreenX - screenCenterX
+            val dy = targetScreenY - screenCenterY
+            val angle = atan2(dy, dx)
+
+            // Calculate border intersection
+            val clampedX = (targetScreenX).coerceIn(margin, canvasWidth - margin)
+            val clampedY = (targetScreenY).coerceIn(margin, canvasHeight - margin)
+
+            val indicatorColor = if (obj.isPrimary) NanoCyan else HazardYellow
+
+            // Draw Waypoint Arrow Triangle
+            val arrowPath = Path().apply {
+                val headX = clampedX + cos(angle) * 14f
+                val headY = clampedY + sin(angle) * 14f
+                val leftX = clampedX + cos(angle + 2.5f) * 10f
+                val leftY = clampedY + sin(angle + 2.5f) * 10f
+                val rightX = clampedX + cos(angle - 2.5f) * 10f
+                val rightY = clampedY + sin(angle - 2.5f) * 10f
+
+                moveTo(headX, headY)
+                lineTo(leftX, leftY)
+                lineTo(rightX, rightY)
+                close()
+            }
+
+            drawPath(path = arrowPath, color = indicatorColor)
+            drawPath(path = arrowPath, color = Color.White, style = Stroke(width = 1.5f))
+
+            // Distance in meters
+            val distWorld = hypot(tx - player.x, ty - player.y)
+            val distMeters = (distWorld / 64f * 5f).toInt() // 64f tile ~ 5 meters
+            val label = "${obj.title} (${distMeters}m)"
+
+            drawSafeText(
+                textMeasurer = textMeasurer,
+                text = label,
+                style = TextStyle(color = indicatorColor, fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                topLeft = Offset((clampedX - 40f).coerceIn(10f, canvasWidth - 140f), (clampedY + 12f).coerceIn(10f, canvasHeight - 20f))
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawSafeText(
+    textMeasurer: androidx.compose.ui.text.TextMeasurer,
+    text: String,
+    style: TextStyle,
+    topLeft: Offset
+) {
+    try {
+        val layoutResult = textMeasurer.measure(
+            text = androidx.compose.ui.text.AnnotatedString(text),
+            style = style
+        )
+        drawText(
+            textLayoutResult = layoutResult,
+            topLeft = topLeft
+        )
+    } catch (_: Throwable) {}
 }

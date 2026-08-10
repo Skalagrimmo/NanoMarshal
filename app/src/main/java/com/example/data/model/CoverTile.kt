@@ -9,7 +9,10 @@ enum class VoxelType {
     ENERGY_BARRIER,
     ACID_POOL,
     OBJECTIVE_NODE,
-    DESTRUCTIBLE_PILLAR
+    DESTRUCTIBLE_PILLAR,
+    REINFORCED_METAL,
+    CONCRETE_WALL,
+    ALIEN_BIOMASS
 }
 
 enum class CoverHeight {
@@ -28,7 +31,14 @@ data class VoxelTile(
     var isDestructible: Boolean = true,
     var coverHeight: CoverHeight = CoverHeight.NONE,
     var lodLevel: Int = 0,
-    var isDisintegrated: Boolean = false
+    var isDisintegrated: Boolean = false,
+    var deformationX: Float = 0f,
+    var deformationY: Float = 0f,
+    var meshScaleX: Float = 1.0f,
+    var meshScaleY: Float = 1.0f,
+    var rotationAngle: Float = 0f,
+    var damageCracksCount: Int = 0,
+    var hitFlashTimer: Float = 0f
 ) {
     val isWalkable: Boolean get() = (coverHeight == CoverHeight.NONE && type != VoxelType.ACID_POOL) || isDisintegrated
     val isHazard: Boolean get() = type == VoxelType.ACID_POOL && !isDisintegrated

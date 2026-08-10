@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.ObjectiveStatus
 import com.example.data.model.PlayerStance
 import com.example.engine.GameState
 import com.example.ui.theme.*
@@ -174,13 +175,157 @@ fun TacticalHUD(
                     }
                 }
 
-                // DAG LOD Indicator
-                Text(
-                    text = "LOD: 0.85 // VOX_DAG: ACTIVE",
-                    color = NanoCyan.copy(alpha = 0.7f),
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                // DAG LOD Indicator & SVDAG Compression Metric
+                val compStr = String.format("%.1f", gameState.svdagCompressionRatio)
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "SVDAG COMP: $compStr% // NODES: ${gameState.uniqueDagNodes}/${gameState.totalDagNodes}",
+                        color = NanoCyan.copy(alpha = 0.85f),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "LOD [L0:${gameState.lod0Count} L1:${gameState.lod1Count} L2:${gameState.lod2Count}]",
+                        color = TextMuted,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // MISSION OBJECTIVES OVERLAY CARD
+            if (gameState.objectives.isNotEmpty()) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("objective_manager_hud"),
+                    color = VoidDark.copy(alpha = 0.88f),
+                    shape = RoundedCornerShape(10.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder)
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Flag,
+                                    contentDescription = "Objectives",
+                                    tint = NanoCyan,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "MISSION OBJECTIVES",
+                                    color = NanoCyan,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp
+                                )
+                            }
+                            val completedCount = gameState.objectives.count { it.status == ObjectiveStatus.COMPLETED }
+                            Text(
+                                text = "$completedCount / ${gameState.objectives.size} DONE",
+                                color = TextMuted,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        gameState.objectives.take(3).forEach { obj ->
+                            val statusColor = when (obj.status) {
+                                ObjectiveStatus.COMPLETED -> NaniteGreen
+                                ObjectiveStatus.FAILED -> LaserRed
+                                ObjectiveStatus.IN_PROGRESS -> if (obj.isPrimary) NanoCyan else HazardYellow
+                                ObjectiveStatus.NOT_STARTED -> TextMuted
+                            }
+
+                            val icon = when (obj.status) {
+                                ObjectiveStatus.COMPLETED -> Icons.Default.CheckCircle
+                                ObjectiveStatus.FAILED -> Icons.Default.Cancel
+                                ObjectiveStatus.IN_PROGRESS -> Icons.Default.RadioButtonUnchecked
+                                ObjectiveStatus.NOT_STARTED -> Icons.Default.Lock
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = null,
+                                    tint = statusColor,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = obj.title,
+                                    color = if (obj.status == ObjectiveStatus.COMPLETED) TextMuted else TextPrimary,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (obj.isPrimary) FontWeight.Bold else FontWeight.Normal,
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                if (obj.timerRemainingSec != null && obj.status == ObjectiveStatus.IN_PROGRESS) {
+                                    Text(
+                                        text = "${obj.timerRemainingSec?.toInt()}s",
+                                        color = statusColor,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                } else if (obj.requiredProgress > 1 && obj.status == ObjectiveStatus.IN_PROGRESS) {
+                                    Text(
+                                        text = "${obj.currentProgress}/${obj.requiredProgress}",
+                                        color = statusColor,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ACTIVE OBJECTIVE TOAST BANNER
+            AnimatedVisibility(visible = gameState.activeObjectiveToast != null) {
+                gameState.activeObjectiveToast?.let { toast ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp),
+                        color = VoidDark.copy(alpha = 0.95f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, NanoCyan)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Toast",
+                                tint = NanoCyan,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = toast,
+                                color = TextPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
             }
         }
 

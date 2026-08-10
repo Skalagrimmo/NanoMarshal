@@ -23,5 +23,8 @@ data class Particle(
     var life: Float = 1.0f, // 1.0 down to 0.0
     var maxLife: Float = 1.0f,
     var type: ParticleType = ParticleType.PLASMA_SPARK,
-    var text: String = "" // For damage floating numbers
+    var text: String = "", // For damage floating numbers
+    var rotation: Float = 0f,
+    var vRot: Float = 0f,
+    var aspectRatio: Float = 1.0f
 )
