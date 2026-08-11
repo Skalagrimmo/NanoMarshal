@@ -1,15 +1,11 @@
 package com.example.data.repository
 
 import android.content.Context
-import android.content.SharedPreferences
-import com.example.data.database.AppDatabase
-import com.example.data.database.WeaponInventoryEntity
+import com.example.data.database.*
 import com.example.data.model.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 data class PlayerProfile(
@@ -25,66 +21,115 @@ data class PlayerProfile(
 )
 
 class GameRepository(context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences("nanomarshal_prefs", Context.MODE_PRIVATE)
     private val database = AppDatabase.getInstance(context)
     private val inventoryDao = database.weaponInventoryDao()
+    private val playerStatsDao = database.playerStatsDao()
+    private val levelProgressDao = database.levelProgressDao()
+    private val gadgetInventoryDao = database.gadgetInventoryDao()
+
     private val repositoryScope = CoroutineScope(Dispatchers.IO)
 
     val weaponInventoryFlow: Flow<List<WeaponInventoryEntity>> = inventoryDao.getInventoryFlow()
+    val playerStatsFlow: Flow<PlayerStatsEntity?> = playerStatsDao.getPlayerStatsFlow()
+    val levelProgressFlow: Flow<List<LevelProgressEntity>> = levelProgressDao.getAllLevelProgressFlow()
+    val gadgetInventoryFlow: Flow<List<GadgetInventoryEntity>> = gadgetInventoryDao.getGadgetsFlow()
+
+    // Direct Entity API for ViewModels
+    val allWeaponsFlow: Flow<List<WeaponEntity>> = inventoryDao.getInventoryFlow()
+    val allLevelsFlow: Flow<List<LevelData>> = levelProgressDao.getAllLevelProgressFlow()
+
+    suspend fun getPlayerStats(): PlayerStats? = playerStatsDao.getPlayerStats()
+    suspend fun updatePlayerStats(stats: PlayerStats) = playerStatsDao.insertOrUpdate(stats)
+
+    suspend fun getAllWeapons(): List<WeaponEntity> = inventoryDao.getInventoryList()
+    suspend fun getWeaponById(id: String): WeaponEntity? = inventoryDao.getWeaponById(id)
+    suspend fun insertWeapon(weapon: WeaponEntity) = inventoryDao.insertOrUpdate(weapon)
+    suspend fun updateWeapon(weapon: WeaponEntity) = inventoryDao.update(weapon)
+    suspend fun deleteWeapon(weapon: WeaponEntity) = inventoryDao.delete(weapon)
+
+    suspend fun getAllLevels(): List<LevelData> = levelProgressDao.getAllLevelProgress()
+    suspend fun getLevelById(missionId: String): LevelData? = levelProgressDao.getLevelProgressById(missionId)
+    suspend fun insertLevel(level: LevelData) = levelProgressDao.insertOrUpdate(level)
+    suspend fun updateLevel(level: LevelData) = levelProgressDao.update(level)
+    suspend fun deleteLevel(level: LevelData) = levelProgressDao.delete(level)
 
     init {
         repositoryScope.launch {
             if (inventoryDao.getCount() == 0) {
                 inventoryDao.insertAll(AppDatabase.DEFAULT_INVENTORY)
             }
+            if (playerStatsDao.getCount() == 0) {
+                playerStatsDao.insertOrUpdate(AppDatabase.DEFAULT_PLAYER_STATS)
+            }
+            if (levelProgressDao.getCount() == 0) {
+                levelProgressDao.insertAll(AppDatabase.DEFAULT_LEVEL_PROGRESS)
+            }
+            if (gadgetInventoryDao.getCount() == 0) {
+                gadgetInventoryDao.insertAll(AppDatabase.DEFAULT_GADGETS)
+            }
         }
     }
 
-    private val _profile = MutableStateFlow(loadProfile())
-    val profile: StateFlow<PlayerProfile> = _profile
+    // Reactive StateFlow combining all Room DAOs for full UI compatibility
+    val profile: StateFlow<PlayerProfile> = combine(
+        playerStatsDao.getPlayerStatsFlow(),
+        inventoryDao.getInventoryFlow(),
+        gadgetInventoryDao.getGadgetsFlow(),
+        levelProgressDao.getAllLevelProgressFlow()
+    ) { stats, weapons, gadgets, levels ->
+        val currentStats = stats ?: AppDatabase.DEFAULT_PLAYER_STATS
+        val unlockedWeapons = weapons.filter { it.isUnlocked }.map { it.id }.toSet()
+            .ifEmpty { setOf("w_needle", "w_plasma") }
+        val unlockedGadgets = gadgets.filter { it.isUnlocked }.map { it.id }.toSet()
+            .ifEmpty { setOf("g_grenade") }
+        val completedMissions = levels.filter { it.isCompleted }.map { it.missionId }.toSet()
+        val starsMap = levels.associate { it.missionId to it.starsEarned }
 
-    private fun loadProfile(): PlayerProfile {
-        val credits = prefs.getInt("credits", 2000)
-        val cores = prefs.getInt("cores", 8)
-        val weapons = prefs.getStringSet("weapons", setOf("w_needle", "w_plasma")) ?: setOf("w_needle", "w_plasma")
-        val gadgets = prefs.getStringSet("gadgets", setOf("g_grenade")) ?: setOf("g_grenade")
-        val primary = prefs.getString("primary", "w_plasma") ?: "w_plasma"
-        val secondary = prefs.getString("secondary", "w_needle") ?: "w_needle"
-        val activeGadget = prefs.getString("gadget", "g_grenade") ?: "g_grenade"
-        val completedMissions = prefs.getStringSet("completed_missions", emptySet()) ?: emptySet()
-
-        return PlayerProfile(
-            credits = credits,
-            naniteCores = cores,
-            unlockedWeaponIds = weapons,
-            unlockedGadgetIds = gadgets,
-            primaryWeaponId = primary,
-            secondaryWeaponId = secondary,
-            activeGadgetId = activeGadget,
-            completedMissionIds = completedMissions
+        PlayerProfile(
+            credits = currentStats.credits,
+            naniteCores = currentStats.naniteCores,
+            unlockedWeaponIds = unlockedWeapons,
+            unlockedGadgetIds = unlockedGadgets,
+            primaryWeaponId = currentStats.primaryWeaponId,
+            secondaryWeaponId = currentStats.secondaryWeaponId,
+            activeGadgetId = currentStats.activeGadgetId,
+            completedMissionIds = completedMissions,
+            missionStars = starsMap
         )
-    }
+    }.stateIn(
+        scope = repositoryScope,
+        started = SharingStarted.Eagerly,
+        initialValue = PlayerProfile()
+    )
 
     fun saveProfile(profile: PlayerProfile) {
-        _profile.value = profile
-        prefs.edit()
-            .putInt("credits", profile.credits)
-            .putInt("cores", profile.naniteCores)
-            .putStringSet("weapons", profile.unlockedWeaponIds)
-            .putStringSet("gadgets", profile.unlockedGadgetIds)
-            .putString("primary", profile.primaryWeaponId)
-            .putString("secondary", profile.secondaryWeaponId)
-            .putString("gadget", profile.activeGadgetId)
-            .putStringSet("completed_missions", profile.completedMissionIds)
-            .apply()
+        repositoryScope.launch {
+            val stats = playerStatsDao.getPlayerStats() ?: AppDatabase.DEFAULT_PLAYER_STATS
+            playerStatsDao.insertOrUpdate(
+                stats.copy(
+                    credits = profile.credits,
+                    naniteCores = profile.naniteCores,
+                    primaryWeaponId = profile.primaryWeaponId,
+                    secondaryWeaponId = profile.secondaryWeaponId,
+                    activeGadgetId = profile.activeGadgetId,
+                    lastUpdatedTimestamp = System.currentTimeMillis()
+                )
+            )
+            for (weaponId in profile.unlockedWeaponIds) {
+                inventoryDao.unlockWeapon(weaponId)
+            }
+            for (gadgetId in profile.unlockedGadgetIds) {
+                gadgetInventoryDao.unlockGadget(gadgetId)
+            }
+        }
     }
 
     fun buyWeapon(weapon: Weapon): Boolean {
-        val curr = _profile.value
+        val curr = profile.value
         if (curr.credits >= weapon.cost && !curr.unlockedWeaponIds.contains(weapon.id)) {
-            val newWeapons = curr.unlockedWeaponIds + weapon.id
-            saveProfile(curr.copy(credits = curr.credits - weapon.cost, unlockedWeaponIds = newWeapons))
             repositoryScope.launch {
+                val stats = playerStatsDao.getPlayerStats() ?: AppDatabase.DEFAULT_PLAYER_STATS
+                playerStatsDao.insertOrUpdate(stats.copy(credits = stats.credits - weapon.cost))
                 inventoryDao.unlockWeapon(weapon.id)
             }
             return true
@@ -93,20 +138,24 @@ class GameRepository(context: Context) {
     }
 
     fun buyGadget(gadget: Gadget): Boolean {
-        val curr = _profile.value
+        val curr = profile.value
         if (curr.credits >= gadget.cost && !curr.unlockedGadgetIds.contains(gadget.id)) {
-            val newGadgets = curr.unlockedGadgetIds + gadget.id
-            saveProfile(curr.copy(credits = curr.credits - gadget.cost, unlockedGadgetIds = newGadgets))
+            repositoryScope.launch {
+                val stats = playerStatsDao.getPlayerStats() ?: AppDatabase.DEFAULT_PLAYER_STATS
+                playerStatsDao.insertOrUpdate(stats.copy(credits = stats.credits - gadget.cost))
+                gadgetInventoryDao.unlockGadget(gadget.id)
+            }
             return true
         }
         return false
     }
 
     fun buyAmmoRefill(weaponId: String, costCredits: Int): Boolean {
-        val curr = _profile.value
+        val curr = profile.value
         if (curr.credits >= costCredits) {
-            saveProfile(curr.copy(credits = curr.credits - costCredits))
             repositoryScope.launch {
+                val stats = playerStatsDao.getPlayerStats() ?: AppDatabase.DEFAULT_PLAYER_STATS
+                playerStatsDao.insertOrUpdate(stats.copy(credits = stats.credits - costCredits))
                 val item = inventoryDao.getWeaponById(weaponId)
                 if (item != null) {
                     val newReserve = (item.reserveAmmo + item.maxReserveAmmo / 2).coerceAtMost(item.maxReserveAmmo)
@@ -119,10 +168,11 @@ class GameRepository(context: Context) {
     }
 
     fun upgradeWeaponLevel(weaponId: String, costCores: Int): Boolean {
-        val curr = _profile.value
+        val curr = profile.value
         if (curr.naniteCores >= costCores) {
-            saveProfile(curr.copy(naniteCores = curr.naniteCores - costCores))
             repositoryScope.launch {
+                val stats = playerStatsDao.getPlayerStats() ?: AppDatabase.DEFAULT_PLAYER_STATS
+                playerStatsDao.insertOrUpdate(stats.copy(naniteCores = stats.naniteCores - costCores))
                 val item = inventoryDao.getWeaponById(weaponId)
                 if (item != null) {
                     val nextLevel = item.upgradeLevel + 1
@@ -146,19 +196,32 @@ class GameRepository(context: Context) {
     }
 
     fun recordMissionVictory(missionId: String, stars: Int, creditsEarned: Int, coresEarned: Int) {
-        val curr = _profile.value
-        val newCompleted = curr.completedMissionIds + missionId
-        val newStars = curr.missionStars.toMutableMap().apply { put(missionId, maxOf(this[missionId] ?: 0, stars)) }
-        saveProfile(
-            curr.copy(
-                credits = curr.credits + creditsEarned,
-                naniteCores = curr.naniteCores + coresEarned,
-                completedMissionIds = newCompleted,
-                missionStars = newStars
-            )
-        )
-        // Bonus ammo refill for all unlocked weapons upon mission victory
         repositoryScope.launch {
+            val stats = playerStatsDao.getPlayerStats() ?: AppDatabase.DEFAULT_PLAYER_STATS
+            playerStatsDao.insertOrUpdate(
+                stats.copy(
+                    credits = stats.credits + creditsEarned,
+                    naniteCores = stats.naniteCores + coresEarned,
+                    totalMissionsCompleted = stats.totalMissionsCompleted + 1,
+                    lastUpdatedTimestamp = System.currentTimeMillis()
+                )
+            )
+
+            // Mark mission completed in Room level_progress DB
+            levelProgressDao.recordCompletion(
+                missionId = missionId,
+                stars = stars,
+                score = creditsEarned * 10
+            )
+
+            // Unlock next level if present
+            val allLevels = levelProgressDao.getAllLevelProgress()
+            val currentIndex = allLevels.indexOfFirst { it.missionId == missionId }
+            if (currentIndex != -1 && currentIndex + 1 < allLevels.size) {
+                levelProgressDao.unlockLevel(allLevels[currentIndex + 1].missionId)
+            }
+
+            // Bonus ammo refill for all unlocked weapons upon mission victory
             val items = inventoryDao.getInventoryList()
             for (item in items) {
                 if (item.isUnlocked) {
@@ -169,4 +232,3 @@ class GameRepository(context: Context) {
         }
     }
 }
-

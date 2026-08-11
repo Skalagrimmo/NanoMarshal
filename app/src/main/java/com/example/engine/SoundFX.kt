@@ -12,7 +12,7 @@ object SoundFX {
     private val scope = CoroutineScope(Dispatchers.Default)
 
     enum class SoundType {
-        LASER_SHOT, PLASMA_BLAST, EXPLOSION, STEALTH_TAKEDOWN, RELOAD, HIT_SHIELD, ALERT_SIREN, MISSION_WIN, HIT_WALL
+        LASER_SHOT, PLASMA_BLAST, EXPLOSION, STEALTH_TAKEDOWN, RELOAD, HIT_SHIELD, ALERT_SIREN, MISSION_WIN, HIT_WALL, RICOCHET
     }
 
     fun play(sound: SoundType) {
@@ -28,6 +28,7 @@ object SoundFX {
                     SoundType.ALERT_SIREN -> generateSiren(600f, 900f, 200)
                     SoundType.MISSION_WIN -> generateFanfare()
                     SoundType.HIT_WALL -> generatePew(500f, 150f, 40)
+                    SoundType.RICOCHET -> generatePew(1400f, 2200f, 60)
                 }
             } catch (e: Exception) {
                 // Ignore audio hardware exception fallback

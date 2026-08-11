@@ -4,6 +4,12 @@ enum class PlayerStance {
     STAND, CROUCH, PRONE
 }
 
+enum class AutoAimMode {
+    SMART,   // Magnetic lock-on within tactical cone
+    PRECISE, // High precision lock-on to closest high threat target
+    OFF      // Manual free aiming
+}
+
 data class PlayerState(
     var x: Float = 400f,
     var y: Float = 400f,
@@ -11,6 +17,14 @@ data class PlayerState(
     var vy: Float = 0f,
     var facingAngle: Float = 0f,
     var aimAngle: Float = 0f,
+    var rawInputAngle: Float = 0f, // Unmodified joystick aim angle before autoaim
+    var isAutoAimEnabled: Boolean = true,
+    var autoAimMode: AutoAimMode = AutoAimMode.SMART,
+    var autoAimTargetEnemyId: String? = null,
+    var autoAimTargetPos: Pair<Float, Float>? = null,
+    var isAutoAimLocked: Boolean = false,
+    var autoAimLockProgress: Float = 0f, // 0.0 to 1.0 for lock-on animation
+    var maxRicochetsOverride: Int? = null,
     var health: Float = 100f,
     var maxHealth: Float = 100f,
     var nanoShield: Float = 50f,

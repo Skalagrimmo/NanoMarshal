@@ -329,17 +329,93 @@ fun VoxelCanvas(
             // 7. Render Real-Time Dynamic Light Bloom & Explosion Shockwave Pass
             drawDynamicLightBloomPass(gameState.dynamicLights)
 
-            // 7. Render Player Character
+            // 7. Render Player Character & Aiming Mechanics
             if (player.isAlive) {
-                // Laser Aiming Guide Line
-                val aimEndX = player.x + cos(player.aimAngle) * 400f
-                val aimEndY = player.y + sin(player.aimAngle) * 400f
-                drawLine(
-                    color = NanoCyan.copy(alpha = 0.45f),
-                    start = Offset(player.x, player.y),
-                    end = Offset(aimEndX, aimEndY),
-                    strokeWidth = 2f
-                )
+                // Render Ricochet Trajectory Preview Line
+                if (gameState.ricochetTrajectoryPoints.size >= 2) {
+                    for (i in 0 until gameState.ricochetTrajectoryPoints.size - 1) {
+                        val p1 = gameState.ricochetTrajectoryPoints[i]
+                        val p2 = gameState.ricochetTrajectoryPoints[i + 1]
+                        val alpha = (0.8f - i * 0.22f).coerceAtLeast(0.3f)
+                        val segColor = if (i == 0) NanoCyan else HazardYellow
+
+                        drawLine(
+                            color = segColor.copy(alpha = alpha),
+                            start = Offset(p1.first, p1.second),
+                            end = Offset(p2.first, p2.second),
+                            strokeWidth = if (i == 0) 2.5f else 2f
+                        )
+
+                        // Draw ricochet bounce node circle
+                        if (i > 0) {
+                            drawCircle(
+                                color = HazardYellow,
+                                radius = 5.5f,
+                                center = Offset(p1.first, p1.second)
+                            )
+                            drawCircle(
+                                color = Color.White,
+                                radius = 2.5f,
+                                center = Offset(p1.first, p1.second)
+                            )
+                        }
+                    }
+                } else {
+                    // Standard Laser Aiming Guide Line
+                    val aimEndX = player.x + cos(player.aimAngle) * 400f
+                    val aimEndY = player.y + sin(player.aimAngle) * 400f
+                    drawLine(
+                        color = NanoCyan.copy(alpha = 0.45f),
+                        start = Offset(player.x, player.y),
+                        end = Offset(aimEndX, aimEndY),
+                        strokeWidth = 2f
+                    )
+                }
+
+                // Render Auto-Aim Lock Target Reticle
+                if (player.isAutoAimLocked && player.autoAimTargetPos != null) {
+                    val tx = player.autoAimTargetPos!!.first
+                    val ty = player.autoAimTargetPos!!.second
+
+                    // Lock-On Connecting Laser Ray
+                    drawLine(
+                        color = PlasmaPink.copy(alpha = 0.85f),
+                        start = Offset(player.x, player.y),
+                        end = Offset(tx, ty),
+                        strokeWidth = 2.5f
+                    )
+
+                    // Animated Target Brackets around locked enemy
+                    val reticleRadius = 28f
+                    val bracketLen = 12f
+
+                    val topLeft = Offset(tx - reticleRadius, ty - reticleRadius)
+                    val topRight = Offset(tx + reticleRadius, ty - reticleRadius)
+                    val bottomLeft = Offset(tx - reticleRadius, ty + reticleRadius)
+                    val bottomRight = Offset(tx + reticleRadius, ty + reticleRadius)
+
+                    drawLine(PlasmaPink, topLeft, Offset(topLeft.x + bracketLen, topLeft.y), strokeWidth = 3f)
+                    drawLine(PlasmaPink, topLeft, Offset(topLeft.x, topLeft.y + bracketLen), strokeWidth = 3f)
+
+                    drawLine(PlasmaPink, topRight, Offset(topRight.x - bracketLen, topRight.y), strokeWidth = 3f)
+                    drawLine(PlasmaPink, topRight, Offset(topRight.x, topRight.y + bracketLen), strokeWidth = 3f)
+
+                    drawLine(PlasmaPink, bottomLeft, Offset(bottomLeft.x + bracketLen, bottomLeft.y), strokeWidth = 3f)
+                    drawLine(PlasmaPink, bottomLeft, Offset(bottomLeft.x, bottomLeft.y - bracketLen), strokeWidth = 3f)
+
+                    drawLine(PlasmaPink, bottomRight, Offset(bottomRight.x - bracketLen, bottomRight.y), strokeWidth = 3f)
+                    drawLine(PlasmaPink, bottomRight, Offset(bottomRight.x, bottomRight.y - bracketLen), strokeWidth = 3f)
+
+                    drawCircle(color = PlasmaPink.copy(alpha = 0.35f), radius = reticleRadius, center = Offset(tx, ty), style = Stroke(width = 1.5f))
+                    drawCircle(color = PlasmaPink, radius = 4f, center = Offset(tx, ty))
+
+                    drawText(
+                        textMeasurer = textMeasurer,
+                        text = "AUTOAIM [${player.autoAimMode.name}]",
+                        style = TextStyle(color = PlasmaPink, fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                        topLeft = Offset(tx - 36f, ty - 45f)
+                    )
+                }
 
                 // Cover Snap Surface Contact Bar & Barrier Shield Arc
                 if (player.isCoverSnapped) {

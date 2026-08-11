@@ -18,7 +18,10 @@ data class Bullet(
     val isPlayerBullet: Boolean,
     val pierceCover: Boolean = false,
     val color: Color = Color(0xFF00F0FF),
-    var lifeMs: Long = 1500
+    var lifeMs: Long = 1500,
+    var ricochetCount: Int = 0,
+    val maxRicochets: Int = 2,
+    var lastHitTileKey: String? = null
 )
 
 data class ThrowableItem(
@@ -47,6 +50,7 @@ data class GameState(
     val isVictory: Boolean = false,
     val isPaused: Boolean = false,
     val isTacticalGridOverlayEnabled: Boolean = true,
+    val ricochetTrajectoryPoints: List<Pair<Float, Float>> = emptyList(),
     val screenShakeMs: Long = 0,
     val missionTimeMs: Long = 0,
     val svdagCompressionRatio: Float = 0f,
@@ -240,6 +244,9 @@ class GameEngine(
         // Update Dynamic Lighting
         val activeLights = updateDynamicLights(bullets, player, enemies, deltaSec)
 
+        // Compute predictive ricochet trajectory
+        val trajectoryPoints = computeRicochetTrajectory(player, maxBounces = player.activeWeapon.maxRicochets)
+
         _gameState.value = currState.copy(
             player = player,
             enemies = enemies,
@@ -250,6 +257,7 @@ class GameEngine(
             activeObjectiveToast = activeToast,
             activeObjectiveToastMs = activeToastMs,
             dynamicLights = activeLights,
+            ricochetTrajectoryPoints = trajectoryPoints,
             isVictory = isVictory,
             isGameOver = isGameOver,
             screenShakeMs = (currState.screenShakeMs - dtMs).coerceAtLeast(0),
@@ -288,17 +296,179 @@ class GameEngine(
         )
     }
 
-    fun handlePlayerAimInput(angle: Float, isFiring: Boolean) {
+    fun toggleAutoAimMode() {
         val curr = _gameState.value.player
+        val nextMode = when (curr.autoAimMode) {
+            AutoAimMode.SMART -> AutoAimMode.PRECISE
+            AutoAimMode.PRECISE -> AutoAimMode.OFF
+            AutoAimMode.OFF -> AutoAimMode.SMART
+        }
         _gameState.value = _gameState.value.copy(
             player = curr.copy(
-                aimAngle = angle,
+                autoAimMode = nextMode,
+                isAutoAimEnabled = (nextMode != AutoAimMode.OFF)
+            )
+        )
+    }
+
+    private fun normalizeAngle(rad: Float): Float {
+        var a = rad % (2 * Math.PI.toFloat())
+        if (a > Math.PI.toFloat()) a -= 2 * Math.PI.toFloat()
+        else if (a < -Math.PI.toFloat()) a += 2 * Math.PI.toFloat()
+        return a
+    }
+
+    private fun blendAngles(a1: Float, a2: Float, t: Float): Float {
+        val diff = normalizeAngle(a2 - a1)
+        return a1 + diff * t
+    }
+
+    fun processAutoAimForAngle(player: PlayerState, rawAngle: Float): PlayerState {
+        player.rawInputAngle = rawAngle
+        if (player.autoAimMode == AutoAimMode.OFF || !player.isAutoAimEnabled) {
+            return player.copy(
+                aimAngle = rawAngle,
+                isAutoAimLocked = false,
+                autoAimTargetEnemyId = null,
+                autoAimTargetPos = null,
+                autoAimLockProgress = 0f
+            )
+        }
+
+        val aliveEnemies = _gameState.value.enemies.filter { it.isAlive }
+        if (aliveEnemies.isEmpty()) {
+            return player.copy(
+                aimAngle = rawAngle,
+                isAutoAimLocked = false,
+                autoAimTargetEnemyId = null,
+                autoAimTargetPos = null,
+                autoAimLockProgress = 0f
+            )
+        }
+
+        val maxRange = if (player.autoAimMode == AutoAimMode.SMART) 520f else 680f
+        val maxConeRad = if (player.autoAimMode == AutoAimMode.SMART) Math.toRadians(65.0).toFloat() else Math.toRadians(35.0).toFloat()
+
+        var bestEnemy: Enemy? = null
+        var bestScore = Float.MAX_VALUE
+
+        for (e in aliveEnemies) {
+            val dx = e.x - player.x
+            val dy = e.y - player.y
+            val dist = hypot(dx, dy)
+            if (dist > maxRange) continue
+
+            val angleToEnemy = atan2(dy, dx)
+            val angleDiff = abs(normalizeAngle(angleToEnemy - rawAngle))
+
+            if (angleDiff <= maxConeRad) {
+                val score = angleDiff * 300f + dist * 0.7f
+                if (score < bestScore) {
+                    bestScore = score
+                    bestEnemy = e
+                }
+            }
+        }
+
+        return if (bestEnemy != null) {
+            val targetAngle = atan2(bestEnemy.y - player.y, bestEnemy.x - player.x)
+            val magnetism = if (player.autoAimMode == AutoAimMode.SMART) 0.82f else 0.95f
+            val magnetizedAngle = blendAngles(rawAngle, targetAngle, magnetism)
+            val lockProg = (player.autoAimLockProgress + 0.2f).coerceAtMost(1f)
+
+            player.copy(
+                aimAngle = magnetizedAngle,
+                rawInputAngle = rawAngle,
+                isAutoAimLocked = true,
+                autoAimTargetEnemyId = bestEnemy.id,
+                autoAimTargetPos = Pair(bestEnemy.x, bestEnemy.y),
+                autoAimLockProgress = lockProg
+            )
+        } else {
+            player.copy(
+                aimAngle = rawAngle,
+                rawInputAngle = rawAngle,
+                isAutoAimLocked = false,
+                autoAimTargetEnemyId = null,
+                autoAimTargetPos = null,
+                autoAimLockProgress = 0f
+            )
+        }
+    }
+
+    fun handlePlayerAimInput(angle: Float, isFiring: Boolean) {
+        val curr = _gameState.value.player
+        val processedPlayer = processAutoAimForAngle(curr, angle)
+        _gameState.value = _gameState.value.copy(
+            player = processedPlayer.copy(
                 isFiring = isFiring
             )
         )
         if (isFiring) {
             triggerPlayerShot()
         }
+    }
+
+    fun computeRicochetTrajectory(player: PlayerState, maxBounces: Int = 2): List<Pair<Float, Float>> {
+        val points = mutableListOf<Pair<Float, Float>>()
+        points.add(Pair(player.x, player.y))
+
+        var currX = player.x
+        var currY = player.y
+        var dirX = cos(player.aimAngle)
+        var dirY = sin(player.aimAngle)
+
+        val stepSize = 18f
+        val maxSteps = 28
+
+        var currentBounces = 0
+        var lastTileKey: String? = null
+
+        while (currentBounces <= maxBounces && points.size < 50) {
+            var segmentHit = false
+
+            for (step in 0 until maxSteps) {
+                val nextX = currX + dirX * stepSize
+                val nextY = currY + dirY * stepSize
+
+                val tile = terrain.getTileAtWorld(nextX, nextY)
+                if (tile != null && tile.coverHeight != CoverHeight.NONE && !tile.isDisintegrated) {
+                    val tileKey = "${tile.gridX}_${tile.gridY}"
+                    if (tileKey != lastTileKey) {
+                        points.add(Pair(nextX, nextY))
+
+                        val tileCenterX = (tile.gridX + 0.5f) * terrain.tileSize
+                        val tileCenterY = (tile.gridY + 0.5f) * terrain.tileSize
+                        val dx = nextX - tileCenterX
+                        val dy = nextY - tileCenterY
+
+                        val nx = if (abs(dx) > abs(dy)) (if (dx > 0) 1f else -1f) else 0f
+                        val ny = if (abs(dx) <= abs(dy)) (if (dy > 0) 1f else -1f) else 0f
+
+                        val dot = dirX * nx + dirY * ny
+                        dirX = dirX - 2f * dot * nx
+                        dirY = dirY - 2f * dot * ny
+
+                        currX = nextX + nx * 5f
+                        currY = nextY + ny * 5f
+                        lastTileKey = tileKey
+                        currentBounces++
+                        segmentHit = true
+                        break
+                    }
+                }
+
+                currX = nextX
+                currY = nextY
+            }
+
+            if (!segmentHit) {
+                points.add(Pair(currX, currY))
+                break
+            }
+        }
+
+        return points
     }
 
     fun triggerPlayerShot() {
@@ -339,7 +509,9 @@ class GameEngine(
                 damage = weapon.effectiveDamage.toFloat(),
                 isPlayerBullet = true,
                 pierceCover = weapon.pierceCover,
-                color = bulletColor
+                color = bulletColor,
+                ricochetCount = 0,
+                maxRicochets = p.maxRicochetsOverride ?: weapon.maxRicochets
             )
         )
 
@@ -581,11 +753,16 @@ class GameEngine(
             if (tile != null && tile.coverHeight != CoverHeight.NONE && !tile.isDisintegrated) {
                 if (!b.pierceCover) {
                     val bulletAngle = atan2(b.vy, b.vx)
-                    // Damage voxel cover with mesh deformation
-                    val destroyed = terrain.applyDamageToTile(tile.gridX, tile.gridY, b.damage, bulletAngle)
+                    val tileKey = "${tile.gridX}_${tile.gridY}"
+                    val canRicochet = b.ricochetCount < b.maxRicochets && b.lastHitTileKey != tileKey
+
+                    // Damage voxel cover with mesh deformation (half damage if ricocheting off)
+                    val damageToTile = if (canRicochet) b.damage * 0.45f else b.damage
+                    val destroyed = terrain.applyDamageToTile(tile.gridX, tile.gridY, damageToTile, bulletAngle)
                     val impactX = b.x
                     val impactY = b.y
                     val isBarrel = tile.type == VoxelType.EXPLOSIVE_BARREL
+
                     spawnImpactLight(impactX, impactY, color = if (isBarrel) Color(0xFFFFB703) else Color(0xFF00F0FF), radius = 135f)
                     spawnDebrisParticles(
                         particles = particles,
@@ -595,14 +772,93 @@ class GameEngine(
                         impactAngleRad = bulletAngle,
                         tileType = tile.type
                     )
+
                     if (destroyed) {
                         SoundFX.play(SoundFX.SoundType.EXPLOSION)
                         spawnExplosionLight(impactX, impactY, radius = if (isBarrel) 420f else 240f, intensity = 2.5f, color = if (isBarrel) Color(0xFFFF4500) else Color(0xFFFFA500))
+                        iterator.remove()
+                        continue
+                    }
+
+                    if (canRicochet) {
+                        // Calculate surface reflection normal
+                        val tileCenterX = (tile.gridX + 0.5f) * terrain.tileSize
+                        val tileCenterY = (tile.gridY + 0.5f) * terrain.tileSize
+                        val dx = b.x - tileCenterX
+                        val dy = b.y - tileCenterY
+
+                        val nx = if (abs(dx) > abs(dy)) (if (dx > 0) 1f else -1f) else 0f
+                        val ny = if (abs(dx) <= abs(dy)) (if (dy > 0) 1f else -1f) else 0f
+
+                        val dot = b.vx * nx + b.vy * ny
+                        var rx = b.vx - 2f * dot * nx
+                        var ry = b.vy - 2f * dot * ny
+
+                        // Smart Target Seeking Ricochet: bend reflection toward nearest living enemy
+                        var bestEnemyTarget: Enemy? = null
+                        var bestEnemyDist = Float.MAX_VALUE
+                        for (e in enemies) {
+                            if (!e.isAlive) continue
+                            val edist = hypot(e.x - impactX, e.y - impactY)
+                            if (edist < 380f && edist < bestEnemyDist) {
+                                bestEnemyDist = edist
+                                bestEnemyTarget = e
+                            }
+                        }
+
+                        if (bestEnemyTarget != null) {
+                            val seekDx = bestEnemyTarget.x - impactX
+                            val seekDy = bestEnemyTarget.y - impactY
+                            val seekDist = sqrt(seekDx * seekDx + seekDy * seekDy).coerceAtLeast(1f)
+                            val currentSpeed = sqrt(rx * rx + ry * ry)
+
+                            rx = rx * 0.35f + (seekDx / seekDist * currentSpeed) * 0.65f
+                            ry = ry * 0.35f + (seekDy / seekDist * currentSpeed) * 0.65f
+                        }
+
+                        b.vx = rx * 0.88f
+                        b.vy = ry * 0.88f
+                        b.x += nx * 6f
+                        b.y += ny * 6f
+                        b.ricochetCount++
+                        b.lastHitTileKey = tileKey
+
+                        SoundFX.play(SoundFX.SoundType.RICOCHET)
+
+                        // Spawn ricochet spark effect
+                        for (i in 0 until 5) {
+                            val sparkAngle = atan2(ry, rx) + (Random.nextFloat() * 1.2f - 0.6f)
+                            val speed = Random.nextFloat() * 150f + 50f
+                            particles.add(
+                                Particle(
+                                    x = impactX,
+                                    y = impactY,
+                                    vx = cos(sparkAngle) * speed,
+                                    vy = sin(sparkAngle) * speed,
+                                    color = Color(0xFF00F0FF),
+                                    size = Random.nextFloat() * 4f + 3f,
+                                    life = 0.5f,
+                                    maxLife = 0.5f,
+                                    type = ParticleType.PLASMA_SPARK
+                                )
+                            )
+                        }
+
+                        // Floating text indicator
+                        particles.add(
+                            Particle(
+                                x = impactX, y = impactY - 12f, vx = 0f, vy = -20f,
+                                color = Color(0xFF00F0FF),
+                                size = 12f,
+                                type = ParticleType.HIT_NUMBER,
+                                text = "RICOCHET!"
+                            )
+                        )
                     } else {
                         SoundFX.play(SoundFX.SoundType.HIT_WALL)
+                        iterator.remove()
+                        continue
                     }
-                    iterator.remove()
-                    continue
                 }
             }
 

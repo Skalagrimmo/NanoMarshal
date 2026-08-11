@@ -20,3 +20,5 @@ data class WeaponInventoryEntity(
 ) {
     val totalAmmo: Int get() = currentMagAmmo + reserveAmmo
 }
+
+typealias WeaponEntity = WeaponInventoryEntity

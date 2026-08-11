@@ -14,6 +14,8 @@ import com.example.data.repository.GameRepository
 import com.example.ui.screens.*
 import com.example.ui.theme.NanoMarshalTheme
 import com.example.ui.theme.VoidDark
+import com.example.ui.viewmodel.GameViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 enum class Screen {
     MAIN_MENU, MISSION_SELECT, WORKBENCH, LORE_GUIDE, PLAY_GAME
@@ -32,10 +34,13 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = VoidDark
                 ) {
+                    val gameViewModel: GameViewModel = viewModel(factory = GameViewModel.Factory(repository))
+                    val uiState by gameViewModel.uiState.collectAsState()
+
                     var currentScreen by remember { mutableStateOf(Screen.MAIN_MENU) }
                     var activeMission by remember { mutableStateOf(DefaultMissions.MISSION_1) }
 
-                    val profile by repository.profile.collectAsState()
+                    val profile = uiState.profile
 
                     when (currentScreen) {
                         Screen.MAIN_MENU -> {
@@ -52,6 +57,7 @@ class MainActivity : ComponentActivity() {
                                 profile = profile,
                                 onSelectMission = { mission ->
                                     activeMission = mission
+                                    gameViewModel.setActiveMission(mission)
                                     currentScreen = Screen.PLAY_GAME
                                 },
                                 onBack = { currentScreen = Screen.MAIN_MENU }
@@ -77,6 +83,7 @@ class MainActivity : ComponentActivity() {
                                 mission = activeMission,
                                 profile = profile,
                                 repository = repository,
+                                viewModel = gameViewModel,
                                 onExitGame = { currentScreen = Screen.MAIN_MENU }
                             )
                         }

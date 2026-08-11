@@ -37,6 +37,7 @@ fun TacticalHUD(
     onThrowGadget: () -> Unit,
     onPauseToggle: () -> Unit,
     onToggleTacticalOverlay: () -> Unit = {},
+    onToggleAutoAim: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val player = gameState.player
@@ -91,6 +92,37 @@ fun TacticalHUD(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // Auto-Aim Mode Toggle Pill
+                    Surface(
+                        onClick = onToggleAutoAim,
+                        modifier = Modifier.testTag("autoaim_mode_toggle"),
+                        shape = RoundedCornerShape(16.dp),
+                        color = VoidDark.copy(alpha = 0.85f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (player.isAutoAimEnabled) PlasmaPink else SlateBorder
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.TrackChanges,
+                                contentDescription = "Auto-Aim",
+                                tint = if (player.isAutoAimEnabled) PlasmaPink else TextMuted,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "AIM: ${player.autoAimMode.name}",
+                                color = if (player.isAutoAimEnabled) PlasmaPink else TextMuted,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
                     // Tactical Overlay Toggle Pill
                     Surface(
                         onClick = onToggleTacticalOverlay,

@@ -22,6 +22,7 @@ import com.example.engine.GameEngine
 import com.example.ui.components.TacticalHUD
 import com.example.ui.components.VoxelCanvas
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.GameViewModel
 import kotlinx.coroutines.delay
 
 @Composable
@@ -29,6 +30,7 @@ fun GameScreen(
     mission: Mission,
     profile: PlayerProfile,
     repository: GameRepository,
+    viewModel: GameViewModel? = null,
     onExitGame: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -78,7 +80,8 @@ fun GameScreen(
                 engine.throwGadget(targetX, targetY)
             },
             onPauseToggle = { isPaused = !isPaused },
-            onToggleTacticalOverlay = { engine.toggleTacticalOverlay() }
+            onToggleTacticalOverlay = { engine.toggleTacticalOverlay() },
+            onToggleAutoAim = { engine.toggleAutoAimMode() }
         )
 
         // 3. Pause Dialog Overlay
@@ -104,12 +107,21 @@ fun GameScreen(
         // 4. Mission Victory Modal
         if (gameState.isVictory) {
             LaunchedEffect(Unit) {
-                repository.recordMissionVictory(
-                    missionId = mission.id,
-                    stars = 3,
-                    creditsEarned = mission.rewardCredits,
-                    coresEarned = mission.rewardCores
-                )
+                if (viewModel != null) {
+                    viewModel.recordMissionVictory(
+                        missionId = mission.id,
+                        stars = 3,
+                        creditsEarned = mission.rewardCredits,
+                        coresEarned = mission.rewardCores
+                    )
+                } else {
+                    repository.recordMissionVictory(
+                        missionId = mission.id,
+                        stars = 3,
+                        creditsEarned = mission.rewardCredits,
+                        coresEarned = mission.rewardCores
+                    )
+                }
             }
 
             Box(

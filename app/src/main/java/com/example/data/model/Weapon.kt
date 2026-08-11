@@ -190,7 +190,8 @@ data class Weapon(
         spreadGrowthPerShot = 0.5f
     ),
     val maxHeatCapacity: Float = 100.0f,
-    val coolingRatePerSec: Float = 25.0f
+    val coolingRatePerSec: Float = 25.0f,
+    val maxRicochets: Int = 2
 ) {
     val effectiveDamage: Int get() = (damage * (1.0 + (upgradeLevel - 1) * 0.25)).toInt()
 }

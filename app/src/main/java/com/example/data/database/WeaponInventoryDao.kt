@@ -15,10 +15,22 @@ interface WeaponInventoryDao {
     suspend fun getWeaponById(id: String): WeaponInventoryEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(item: WeaponInventoryEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdate(item: WeaponInventoryEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<WeaponInventoryEntity>)
+
+    @Update
+    suspend fun update(item: WeaponInventoryEntity)
+
+    @Delete
+    suspend fun delete(item: WeaponInventoryEntity)
+
+    @Query("DELETE FROM weapon_inventory WHERE id = :id")
+    suspend fun deleteById(id: String)
 
     @Query("UPDATE weapon_inventory SET currentMagAmmo = :magAmmo, reserveAmmo = :reserveAmmo WHERE id = :id")
     suspend fun updateAmmo(id: String, magAmmo: Int, reserveAmmo: Int)
@@ -35,3 +47,5 @@ interface WeaponInventoryDao {
     @Query("SELECT COUNT(*) FROM weapon_inventory")
     suspend fun getCount(): Int
 }
+
+typealias WeaponDao = WeaponInventoryDao
