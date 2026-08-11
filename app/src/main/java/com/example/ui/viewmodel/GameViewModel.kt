@@ -99,6 +99,10 @@ class GameViewModel(
         return repository.upgradeWeaponLevel(weaponId, costCores)
     }
 
+    fun upgradeWeaponWithCredits(weaponId: String, costCredits: Int): Boolean {
+        return repository.upgradeWeaponWithCredits(weaponId, costCredits)
+    }
+
     fun buyAmmoRefill(weaponId: String, costCredits: Int): Boolean {
         return repository.buyAmmoRefill(weaponId, costCredits)
     }

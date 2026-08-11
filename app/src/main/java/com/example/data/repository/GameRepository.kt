@@ -185,6 +185,24 @@ class GameRepository(context: Context) {
         return false
     }
 
+    fun upgradeWeaponWithCredits(weaponId: String, costCredits: Int): Boolean {
+        val curr = profile.value
+        if (curr.credits >= costCredits) {
+            repositoryScope.launch {
+                val stats = playerStatsDao.getPlayerStats() ?: AppDatabase.DEFAULT_PLAYER_STATS
+                playerStatsDao.insertOrUpdate(stats.copy(credits = stats.credits - costCredits))
+                val item = inventoryDao.getWeaponById(weaponId)
+                if (item != null) {
+                    val nextLevel = item.upgradeLevel + 1
+                    val newDamage = (item.damage * 1.25f).toInt()
+                    inventoryDao.upgradeWeapon(weaponId, nextLevel, newDamage)
+                }
+            }
+            return true
+        }
+        return false
+    }
+
     fun updateWeaponAmmoState(weaponId: String, currentMag: Int, reserveAmmo: Int) {
         repositoryScope.launch {
             inventoryDao.updateAmmo(weaponId, currentMag, reserveAmmo)
