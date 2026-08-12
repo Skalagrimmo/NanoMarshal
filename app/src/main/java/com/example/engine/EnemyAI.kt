@@ -58,6 +58,7 @@ class EnemyAI(
     val worldManager: VoxelWorldManager,
     val terrain: VoxelTerrain
 ) {
+    val fsmController = EnemyFSMController(worldManager, terrain)
 
     /**
      * Checks if there is an unobstructed 3D line-of-sight between two world coordinates
@@ -230,48 +231,35 @@ class EnemyAI(
             // Check voxel cover snapping
             processCoverSnapForEnemy(e, particles, deltaSec)
 
-            // Vision Cone & Line-Of-Sight Check
-            val angleDiff = abs(angleToPlayer - e.facingAngle)
-            val inVisionCone = distToPlayer < e.visionRange && angleDiff < (e.visionAngleRad / 2f)
-            val hasLOS = if (inVisionCone) hasLineOfSight(e.x, e.y, 1.2f, player.x, player.y, 1.2f) else false
+            // Find optimal cover candidate for tactical evaluation
+            val coverSpotCandidates = findBestCoverSpots(e.x, e.y, player.x, player.y)
+            val bestCover = coverSpotCandidates.firstOrNull()
 
-            val canSeePlayer = inVisionCone && hasLOS
-            val canHearPlayer = distToPlayer < player.stealthNoiseRadius
+            // Perception snapshot evaluated via FSM Controller
+            val perception = fsmController.evaluatePerception(e, player, bestCover)
 
-            // Perception & Alert Level update
-            if (canSeePlayer || canHearPlayer) {
-                e.alertLevel = (e.alertLevel + deltaSec * 80f).coerceAtMost(100f)
+            if (perception.canSeePlayer || perception.canHearPlayer) {
                 e.lastKnownPlayerX = player.x
                 e.lastKnownPlayerY = player.y
+            }
 
-                if (e.state == AIState.PATROL || e.state == AIState.SUSPICIOUS || e.state == AIState.INVESTIGATING) {
-                    if (e.type == EnemyType.FLANKER) {
-                        e.state = AIState.FLANKING
-                    } else if (e.type == EnemyType.SNIPER_STALKER) {
-                        e.state = AIState.ENGAGED
-                    } else {
-                        e.state = if (player.isBehindCover) AIState.FLANKING else AIState.ENGAGED
-                    }
-                } else if (player.isBehindCover && e.state == AIState.ENGAGED && e.type != EnemyType.SNIPER_STALKER) {
-                    // Player took cover! Tactical shift to Flanking or Suppressing fire
-                    if (e.type == EnemyType.SHIELD_ENFORCER || Random.nextFloat() < 0.4f) {
-                        e.state = AIState.SUPPRESSING
-                    } else {
-                        e.state = AIState.FLANKING
-                    }
-                    e.pathUpdateTimerMs = 0
-                }
-            } else if (e.alertLevel > 0f) {
-                e.alertLevel = (e.alertLevel - deltaSec * 15f).coerceAtLeast(0f)
-                if (e.alertLevel < 20f && e.state != AIState.PATROL) {
-                    e.state = AIState.SUSPICIOUS
+            // Finite State Machine Transition Evaluation
+            val nextState = fsmController.evaluateNextState(e, perception, deltaSec)
+            if (nextState != e.state) {
+                e.state = nextState
+                e.pathUpdateTimerMs = 0 // Reset path timer on FSM state change
+
+                // If entering SEEKING_COVER, lock onto best cover candidate
+                if (nextState == AIState.SEEKING_COVER && bestCover != null) {
+                    e.targetCoverX = bestCover.gridX
+                    e.targetCoverY = bestCover.gridY
                 }
             }
 
             val egx = (e.x / terrain.tileSize).toInt()
             val egy = (e.y / terrain.tileSize).toInt()
 
-            // AI State Machine Execution
+            // AI State Machine Behavior Execution
             when (e.state) {
                 AIState.PATROL -> {
                     updatePatrolState(e, deltaSec)
@@ -285,27 +273,13 @@ class EnemyAI(
                     e.facingAngle = angleToPlayer
 
                     // Weapon Fire
-                    if (canSeePlayer && now - e.shootCooldownMs > getAttackCooldownMs(e.type)) {
+                    if (perception.canSeePlayer && now - e.shootCooldownMs > getAttackCooldownMs(e.type)) {
                         e.shootCooldownMs = now
                         val bullet = createEnemyBullet(e, angleToPlayer, now)
                         bullets.add(bullet)
                         spawnedBullets.add(bullet)
                         soundList.add("laser_shot")
                         muzzleFlashes.add(Pair(e.x, e.y))
-                    }
-
-                    // Low HP -> Seek Voxel Cover or Retreat
-                    if (e.health < e.maxHealth * 0.35f) {
-                        val bestCover = findBestCoverSpots(e.x, e.y, player.x, player.y).firstOrNull()
-                        if (bestCover != null) {
-                            e.state = AIState.SEEKING_COVER
-                            e.targetCoverX = bestCover.gridX
-                            e.targetCoverY = bestCover.gridY
-                            e.pathUpdateTimerMs = 0
-                        } else {
-                            e.state = AIState.RETREAT
-                            e.pathUpdateTimerMs = 0
-                        }
                     }
                 }
 

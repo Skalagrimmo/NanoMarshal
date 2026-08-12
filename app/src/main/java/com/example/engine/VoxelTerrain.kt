@@ -31,9 +31,9 @@ class VoxelTerrain(
     var objectivePointY: Float = (height - 2) * tileSize
 
     fun generateProceduralMap(missionId: String, seed: Long = System.currentTimeMillis()) {
-        val noiseGen = PerlinNoise(seed)
-        val objectNoiseGen = PerlinNoise(seed + 9999L)
-        val hazardNoiseGen = PerlinNoise(seed + 424242L)
+        val fbmElevation = FbmNoise(seed, defaultOctaves = 5, lacunarity = 2.1, gain = 0.45)
+        val fbmObjectDensity = FbmNoise(seed + 9999L, defaultOctaves = 4, lacunarity = 2.0, gain = 0.5)
+        val fbmHazard = FbmNoise(seed + 424242L, defaultOctaves = 4, lacunarity = 2.2, gain = 0.5)
 
         val spawnX = 2
         val spawnY = 2
@@ -69,19 +69,22 @@ class VoxelTerrain(
                     continue
                 }
 
-                // Sample octave noise maps
-                val elevationVal = noiseGen.octaveNoise(x * 0.18, y * 0.18, octaves = 3, persistence = 0.5)
-                val objectDensityVal = objectNoiseGen.octaveNoise(x * 0.25, y * 0.25, octaves = 2, persistence = 0.5)
-                val hazardVal = hazardNoiseGen.octaveNoise(x * 0.12, y * 0.12, octaves = 2, persistence = 0.5)
+                // Sample domain-warped FBM noise mapped through Spline Curves
+                val rawElevation = fbmElevation.domainWarpEval(x * 0.12, y * 0.12, warpStrength = 0.45, octaves = 5)
+                val elevationVal = SplineCurve.ELEVATION.evaluate(rawElevation)
 
-                // Tactical corridor check: line from spawn to objective
+                val objectDensityVal = fbmObjectDensity.evalWithSpline(x * 0.18, y * 0.18, SplineCurve.OBJECT_DENSITY, octaves = 4)
+
+                val hazardVal = fbmHazard.ridgedEvalWithSpline(x * 0.10, y * 0.10, SplineCurve.HAZARD, octaves = 4)
+
+                // Tactical corridor check: line from spawn to objective evaluated via SplineCurve
                 val distToCorridor = pointToSegmentDistance(
                     px = x.toDouble(), py = y.toDouble(),
                     ax = spawnX.toDouble(), ay = spawnY.toDouble(),
                     bx = objX.toDouble(), by = objY.toDouble()
                 )
 
-                // Populate terrain & destructible environmental objects based on noise thresholds
+                // Populate terrain & destructible environmental objects based on FBM + Spline Curve evaluations
                 when {
                     // Alien Biomass Nests in High Hazard / Organic pockets
                     hazardVal > 0.72 && objectDensityVal in 0.50..0.70 -> {

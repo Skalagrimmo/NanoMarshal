@@ -53,7 +53,7 @@ fun MissionSelectScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text(text = "BOUNTY SECTOR BOARD", color = NanoCyan, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Text(text = "Select high-value target contract", color = TextSecondary, fontSize = 12.sp)
+                    Text(text = "FBM + Catmull-Rom Spline World Synthesis Engine", color = NaniteGreen, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
 
@@ -88,6 +88,12 @@ fun MissionSelectScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(text = mission.sectorName, color = NanoPurple, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 Text(text = mission.title, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(imageVector = Icons.Default.Terrain, contentDescription = "FBM Terrain", tint = NaniteGreen, modifier = Modifier.size(12.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(text = "FBM + Spline Curve Terrain Map", color = NaniteGreen, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                                }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(text = "TARGET: ${mission.bountyTargetName}", color = HazardYellow, fontSize = 12.sp)
                                 Spacer(modifier = Modifier.height(6.dp))

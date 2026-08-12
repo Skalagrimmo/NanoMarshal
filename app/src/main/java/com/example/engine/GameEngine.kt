@@ -59,7 +59,9 @@ data class GameState(
     val lod0Count: Int = 0,
     val lod1Count: Int = 0,
     val lod2Count: Int = 0,
-    val dynamicLights: List<DynamicLight> = emptyList()
+    val dynamicLights: List<DynamicLight> = emptyList(),
+    val audioState: AudioIntensityState = AudioIntensityState(),
+    val voronoiDiagram: VoronoiDiagram? = null
 )
 
 class GameEngine(
@@ -71,6 +73,9 @@ class GameEngine(
     val svdagEngine get() = worldManager.svdagEngine
     val enemyAI = EnemyAI(worldManager, terrain)
     val objectiveManager = ObjectiveManager()
+    val audioManager = AdaptiveAudioManager()
+    val voronoiDiagram = VoronoiDiagram(maxX = mission.gridWidth * 64f, maxY = mission.gridHeight * 64f)
+    val openGlVboRenderer = OpenGlVboRenderer()
 
     private val _gameState = MutableStateFlow(GameState(currentMission = mission))
     val gameState: StateFlow<GameState> = _gameState.asStateFlow()
@@ -81,6 +86,7 @@ class GameEngine(
 
     init {
         initMission()
+        audioManager.startEngine()
     }
 
     fun initMission() {
@@ -247,6 +253,14 @@ class GameEngine(
         // Compute predictive ricochet trajectory
         val trajectoryPoints = computeRicochetTrajectory(player, maxBounces = player.activeWeapon.maxRicochets)
 
+        // 8. Update Adaptive Audio Manager intensity based on Enemy FSM AI states
+        audioManager.update(enemies, player, deltaSec)
+
+        // 9. Update Voronoi Tactical Sites via Gaussian Elimination bisector solver
+        val hazardPositions = particles.filter { it.type == com.example.data.model.ParticleType.EXPLOSION_FLAME }
+            .map { Pair(it.x, it.y) }
+        voronoiDiagram.updateTacticalSites(player, enemies, hazardPositions)
+
         _gameState.value = currState.copy(
             player = player,
             enemies = enemies,
@@ -267,7 +281,9 @@ class GameEngine(
             totalDagNodes = svdagEngine.totalUncompressedNodes,
             lod0Count = svdagEngine.lod0Count,
             lod1Count = svdagEngine.lod1Count,
-            lod2Count = svdagEngine.lod2Count
+            lod2Count = svdagEngine.lod2Count,
+            audioState = audioManager.audioState.value,
+            voronoiDiagram = voronoiDiagram
         )
     }
 

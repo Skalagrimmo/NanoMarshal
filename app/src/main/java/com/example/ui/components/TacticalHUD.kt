@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.ObjectiveStatus
 import com.example.data.model.PlayerStance
+import com.example.engine.AudioIntensityCategory
 import com.example.engine.GameState
 import com.example.ui.theme.*
 
@@ -173,7 +174,65 @@ fun TacticalHUD(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // ADAPTIVE AUDIO INTENSITY HUD BAR
+            val audio = gameState.audioState
+            val audioColor = when (audio.category) {
+                AudioIntensityCategory.CALM_PATROL -> NaniteGreen
+                AudioIntensityCategory.CAUTION_SUSPICIOUS -> HazardYellow
+                AudioIntensityCategory.COMBAT_HIGH -> LaserRed
+                AudioIntensityCategory.BOSS_CRITICAL -> PlasmaPink
+            }
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("adaptive_audio_hud_bar"),
+                shape = RoundedCornerShape(8.dp),
+                color = VoidDark.copy(alpha = 0.85f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, audioColor.copy(alpha = 0.5f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.GraphicEq,
+                        contentDescription = "Adaptive Audio",
+                        tint = audioColor,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = audio.category.label,
+                        color = audioColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    LinearProgressIndicator(
+                        progress = { audio.intensity },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = audioColor,
+                        trackColor = VoidDark
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "${(audio.intensity * 100).toInt()}% | ${audio.tempoBpm} BPM",
+                        color = TextSecondary,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
 
             // Sub-status DAG Indicator & Stealth Badge Row
             Row(
@@ -209,16 +268,17 @@ fun TacticalHUD(
 
                 // DAG LOD Indicator & SVDAG Compression Metric
                 val compStr = String.format("%.1f", gameState.svdagCompressionRatio)
+                val voronoiCount = gameState.voronoiDiagram?.sites?.size ?: 0
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "SVDAG COMP: $compStr% // NODES: ${gameState.uniqueDagNodes}/${gameState.totalDagNodes}",
+                        text = "SVDAG COMP: $compStr% // VORONOI SEEDS: $voronoiCount",
                         color = NanoCyan.copy(alpha = 0.85f),
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "LOD [L0:${gameState.lod0Count} L1:${gameState.lod1Count} L2:${gameState.lod2Count}]",
-                        color = TextMuted,
+                        text = "GLSL SHADER: NANOPUNK [GLES20 | NANITE_CIRCUIT]",
+                        color = NanoCyan.copy(alpha = 0.85f),
                         fontSize = 8.sp,
                         fontWeight = FontWeight.SemiBold
                     )

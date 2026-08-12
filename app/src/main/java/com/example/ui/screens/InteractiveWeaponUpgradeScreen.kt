@@ -28,6 +28,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+import com.example.ui.theme.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.database.WeaponInventoryEntity
 import com.example.data.model.DefaultWeapons
@@ -35,12 +37,13 @@ import com.example.data.model.Weapon
 import com.example.data.repository.GameRepository
 import com.example.data.repository.PlayerProfile
 import com.example.engine.SoundFX
-import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
+
+private val reusableUpgradePath = Path()
 
 // Subsystem Node Types for Visual Weapon Upgrade Blueprint
 enum class UpgradeNode(val icon: @Composable () -> Unit, val color: Color) {
@@ -378,17 +381,17 @@ fun InteractiveWeaponUpgradeScreen(
                     val stockLength = w * 0.25f
 
                     // Main Barrel Shroud
-                    val mainPath = Path().apply {
-                        moveTo(center.x - stockLength, center.y + 12f)
-                        lineTo(center.x - stockLength, center.y - 12f)
-                        lineTo(center.x + barrelLength * 0.6f, center.y - 18f)
-                        lineTo(center.x + barrelLength, center.y - 8f)
-                        lineTo(center.x + barrelLength, center.y + 8f)
-                        lineTo(center.x + barrelLength * 0.6f, center.y + 18f)
-                        close()
-                    }
+                    reusableUpgradePath.reset()
+                    reusableUpgradePath.moveTo(center.x - stockLength, center.y + 12f)
+                    reusableUpgradePath.lineTo(center.x - stockLength, center.y - 12f)
+                    reusableUpgradePath.lineTo(center.x + barrelLength * 0.6f, center.y - 18f)
+                    reusableUpgradePath.lineTo(center.x + barrelLength, center.y - 8f)
+                    reusableUpgradePath.lineTo(center.x + barrelLength, center.y + 8f)
+                    reusableUpgradePath.lineTo(center.x + barrelLength * 0.6f, center.y + 18f)
+                    reusableUpgradePath.close()
+
                     drawPath(
-                        path = mainPath,
+                        path = reusableUpgradePath,
                         color = SlateCard,
                         style = Stroke(width = 3f)
                     )

@@ -332,16 +332,16 @@ class VoxelManager(
      * sampling temperature and moisture noise maps to form distinct landscape biomes.
      */
     fun generateProceduralWorld(seed: Long = 1337L) {
-        val noise = PerlinNoise(seed)
+        val fbm = FbmNoise(seed, defaultOctaves = 5, lacunarity = 2.1, gain = 0.48)
 
         for (x in 0 until width) {
             for (y in 0 until height) {
                 val nx = x * 0.08
                 val ny = y * 0.08
 
-                // Multi-biome climate sampling
-                val tempVal = noise.octaveNoise(nx * 0.6 + 50.0, ny * 0.6 + 50.0, octaves = 2, persistence = 0.5)
-                val moistureVal = noise.octaveNoise(nx * 0.6 + 250.0, ny * 0.6 + 250.0, octaves = 2, persistence = 0.5)
+                // Multi-biome climate sampling via FBM + Climate Splines
+                val tempVal = fbm.evalWithSpline(nx * 0.6 + 50.0, ny * 0.6 + 50.0, SplineCurve.BIOME_CLIMATE, octaves = 3)
+                val moistureVal = fbm.evalWithSpline(nx * 0.6 + 250.0, ny * 0.6 + 250.0, SplineCurve.BIOME_CLIMATE, octaves = 3)
 
                 // Select biome based on climate noise thresholds
                 val biome = when {
@@ -352,9 +352,9 @@ class VoxelManager(
                 }
                 biomeGrid[x][y] = biome
 
-                val terrainElevation = noise.octaveNoise(nx, ny, octaves = 3, persistence = 0.5) * biome.elevationFactor
-                val objectDensity = noise.octaveNoise(nx + 100.0, ny + 100.0, octaves = 2, persistence = 0.6) * biome.densityFactor
-                val hazardVal = noise.octaveNoise(nx + 200.0, ny + 200.0, octaves = 2, persistence = 0.5)
+                val terrainElevation = (fbm.evalWithSpline(nx, ny, SplineCurve.ELEVATION, octaves = 4) * biome.elevationFactor).toFloat()
+                val objectDensity = (fbm.evalWithSpline(nx + 100.0, ny + 100.0, SplineCurve.OBJECT_DENSITY, octaves = 3) * biome.densityFactor).toFloat()
+                val hazardVal = (fbm.ridgedEvalWithSpline(nx + 200.0, ny + 200.0, SplineCurve.HAZARD, octaves = 3)).toFloat()
 
                 // Floor layer (z = 0)
                 grid[x][y][0] = if (hazardVal > (1.0f - biome.hazardChance) && objectDensity < 0.5f) {

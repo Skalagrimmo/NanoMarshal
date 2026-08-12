@@ -102,25 +102,40 @@ object SoundFX {
     }
 
     private fun playRawPCM(buffer: ShortArray, sampleRate: Int) {
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_GAME)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
-            )
-            .setBufferSizeInBytes(buffer.size * 2)
-            .setTransferMode(AudioTrack.MODE_STATIC)
-            .build()
+        try {
+            val track = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_GAME)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(buffer.size * 2)
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build()
 
-        track.write(buffer, 0, buffer.size)
-        track.play()
+            track.write(buffer, 0, buffer.size)
+            track.notificationMarkerPosition = buffer.size
+            track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
+                override fun onMarkerReached(t: AudioTrack?) {
+                    try {
+                        t?.stop()
+                        t?.release()
+                    } catch (_: Exception) {}
+                }
+
+                override fun onPeriodicNotification(t: AudioTrack?) {}
+            })
+            track.play()
+        } catch (_: Exception) {
+            // Ignore audio hardware exception fallback
+        }
     }
 }

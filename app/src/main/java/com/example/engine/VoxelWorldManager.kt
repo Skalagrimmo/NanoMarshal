@@ -231,8 +231,8 @@ class VoxelWorldManager(
         terrain.generateProceduralMap(missionId, seed)
         voxelManager.generateProceduralWorld(seed)
 
-        // 2. Populate 3D Voxel Grid based on terrain elevation and octave noise
-        val noiseGen3D = PerlinNoise(seed + 77777L)
+        // 2. Populate 3D Voxel Grid based on terrain elevation and 3D FBM noise + Spline Curves
+        val fbm3D = FbmNoise(seed + 77777L, defaultOctaves = 4, lacunarity = 2.1, gain = 0.5)
 
         for (x in 0 until width) {
             for (y in 0 until height) {
@@ -240,11 +240,12 @@ class VoxelWorldManager(
                 val targetElevation = surfaceTile.elevationZ
 
                 for (z in 0 until maxDepth) {
-                    val noise3D = noiseGen3D.octaveNoise(
+                    val noise3D = fbm3D.eval3DWithSpline(
                         x * 0.15 + z * 0.08,
                         y * 0.15 + z * 0.08,
-                        octaves = 2,
-                        persistence = 0.5
+                        z * 0.20,
+                        SplineCurve.ELEVATION,
+                        octaves = 3
                     )
 
                     when {

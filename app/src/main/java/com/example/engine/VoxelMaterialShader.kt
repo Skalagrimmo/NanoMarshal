@@ -267,6 +267,9 @@ class ConcreteShaderStrategy : VoxelMaterialShaderStrategy {
  * creeping spores, and oozing acid fluid when breached.
  */
 class AlienBiomassShaderStrategy : VoxelMaterialShaderStrategy {
+    private val veinPath = Path()
+    private val veinPath2 = Path()
+
     override fun drawMaterialBlock(
         drawScope: DrawScope,
         halfW: Float,
@@ -312,30 +315,28 @@ class AlienBiomassShaderStrategy : VoxelMaterialShaderStrategy {
 
         // Animated Bio-Luminescent Vein Tendrils
         val veinColor = material.glowColor.copy(alpha = 0.7f + pulse * 0.3f)
-        val veinPath = Path().apply {
-            moveTo(-halfW + 4f, -halfH + 6f)
-            quadraticTo(
-                -2f + sin(animTimeSec * 2f) * 6f, -halfH / 2f,
-                0f, 0f
-            )
-            quadraticTo(
-                4f + cos(animTimeSec * 2f) * 6f, halfH / 2f,
-                halfW - 6f, halfH - 4f
-            )
-        }
+        veinPath.reset()
+        veinPath.moveTo(-halfW + 4f, -halfH + 6f)
+        veinPath.quadraticTo(
+            -2f + sin(animTimeSec * 2f) * 6f, -halfH / 2f,
+            0f, 0f
+        )
+        veinPath.quadraticTo(
+            4f + cos(animTimeSec * 2f) * 6f, halfH / 2f,
+            halfW - 6f, halfH - 4f
+        )
         drawScope.drawPath(
             path = veinPath,
             color = veinColor,
             style = Stroke(width = 2.5f)
         )
 
-        val veinPath2 = Path().apply {
-            moveTo(halfW - 6f, -halfH + 6f)
-            quadraticTo(
-                2f + cos(animTimeSec * 2.5f) * 5f, 0f,
-                -halfW + 6f, halfH - 6f
-            )
-        }
+        veinPath2.reset()
+        veinPath2.moveTo(halfW - 6f, -halfH + 6f)
+        veinPath2.quadraticTo(
+            2f + cos(animTimeSec * 2.5f) * 5f, 0f,
+            -halfW + 6f, halfH - 6f
+        )
         drawScope.drawPath(
             path = veinPath2,
             color = veinColor.copy(alpha = 0.5f),
@@ -438,6 +439,8 @@ class EnergyPlasmaShaderStrategy : VoxelMaterialShaderStrategy {
  * that brightens and pulses dramatically as HP drops!
  */
 class VolatileHazardShaderStrategy : VoxelMaterialShaderStrategy {
+    private val stripePath = Path()
+
     override fun drawMaterialBlock(
         drawScope: DrawScope,
         halfW: Float,
@@ -468,13 +471,13 @@ class VolatileHazardShaderStrategy : VoxelMaterialShaderStrategy {
         val stripeColor = Color(0xFFF59E0B) // Hazard Yellow
         var stripeX = -halfW * 1.5f
         while (stripeX < halfW * 1.5f) {
-            val stripePath = Path().apply {
-                moveTo(stripeX, -halfH)
-                lineTo(stripeX + stripeWidth, -halfH)
-                lineTo(stripeX + stripeWidth - blockH * 0.6f, halfH)
-                lineTo(stripeX - blockH * 0.6f, halfH)
-                close()
-            }
+            stripePath.reset()
+            stripePath.moveTo(stripeX, -halfH)
+            stripePath.lineTo(stripeX + stripeWidth, -halfH)
+            stripePath.lineTo(stripeX + stripeWidth - blockH * 0.6f, halfH)
+            stripePath.lineTo(stripeX - blockH * 0.6f, halfH)
+            stripePath.close()
+
             drawScope.drawPath(path = stripePath, color = stripeColor.copy(alpha = 0.85f))
             stripeX += stripeWidth * 2.2f
         }
@@ -555,6 +558,100 @@ class DefaultStoneShaderStrategy : VoxelMaterialShaderStrategy {
 }
 
 /**
+ * Shader Strategy for Nanopunk Cybernetic Voxel Geometry.
+ * Features high-contrast neon nanite circuitry, scanning laser pulse lines,
+ * glowing cybernetic nodes, and time-based energy lattice waves.
+ */
+class NanopunkCircuitShaderStrategy : VoxelMaterialShaderStrategy {
+    override fun drawMaterialBlock(
+        drawScope: DrawScope,
+        halfW: Float,
+        halfH: Float,
+        tile: VoxelTile,
+        material: VoxelMaterialProperties,
+        animTimeSec: Float,
+        lightIntensity: Float,
+        lightDirX: Float,
+        lightDirY: Float,
+        addR: Float,
+        addG: Float,
+        addB: Float
+    ) {
+        val blockW = halfW * 2f
+        val blockH = halfH * 2f
+
+        // Dark Cybernetic Base Frame
+        val baseDark = Color(0xFF0F172A)
+        drawScope.drawRoundRect(
+            color = baseDark,
+            topLeft = Offset(-halfW, -halfH),
+            size = Size(blockW, blockH),
+            cornerRadius = CornerRadius(6f)
+        )
+
+        // Nanite Circuit Grid Colors
+        val cyanGlow = Color(0xFF00F0FF)
+        val magentaGlow = Color(0xFFFF008C)
+        val bioGlow = Color(0xFF39FF14)
+
+        val activeNeon = when (tile.type) {
+            VoxelType.ENERGY_BARRIER, VoxelType.OBJECTIVE_NODE -> magentaGlow
+            VoxelType.ALIEN_BIOMASS, VoxelType.ACID_POOL -> bioGlow
+            else -> cyanGlow
+        }
+
+        // Animated Scanning Pulse Line
+        val scanY = -halfH + ((animTimeSec * 25f + tile.gridX * 5f) % blockH)
+        drawScope.drawLine(
+            color = activeNeon.copy(alpha = 0.85f),
+            start = Offset(-halfW + 3f, scanY),
+            end = Offset(halfW - 3f, scanY),
+            strokeWidth = 2.0f
+        )
+
+        // Nanite Circuit Board Traces
+        val pulse = (kotlin.math.sin(animTimeSec * 4.0 + tile.gridX * 0.1) * 0.5 + 0.5).toFloat()
+
+        // Trace 1: Top-left to center node
+        drawScope.drawLine(
+            color = activeNeon.copy(alpha = 0.5f + pulse * 0.4f),
+            start = Offset(-halfW + 4f, -halfH + 4f),
+            end = Offset(-halfW * 0.3f, -halfH * 0.3f),
+            strokeWidth = 1.5f
+        )
+
+        // Trace 2: Bottom-right to center node
+        drawScope.drawLine(
+            color = activeNeon.copy(alpha = 0.5f + pulse * 0.4f),
+            start = Offset(halfW - 4f, halfH - 4f),
+            end = Offset(halfW * 0.3f, halfH * 0.3f),
+            strokeWidth = 1.5f
+        )
+
+        // Center Cybernetic Node Core
+        drawScope.drawCircle(
+            color = activeNeon.copy(alpha = 0.7f + pulse * 0.3f),
+            radius = 3.5f,
+            center = Offset(0f, 0f)
+        )
+        drawScope.drawCircle(
+            color = Color.White,
+            radius = 1.5f,
+            center = Offset(0f, 0f)
+        )
+
+        // High-Contrast Neon Bevel Border
+        drawScope.drawRoundRect(
+            color = activeNeon.copy(alpha = 0.8f),
+            topLeft = Offset(-halfW, -halfH),
+            size = Size(blockW, blockH),
+            cornerRadius = CornerRadius(6f),
+            style = Stroke(width = 1.8f)
+        )
+    }
+}
+
+/**
  * Central VoxelMaterialShader Registry & Dispatcher engine for VoxelWorldManager.
  */
 object VoxelMaterialShader {
@@ -564,6 +661,7 @@ object VoxelMaterialShader {
     private val energyPlasmaStrategy = EnergyPlasmaShaderStrategy()
     private val volatileHazardStrategy = VolatileHazardShaderStrategy()
     private val defaultStoneStrategy = DefaultStoneShaderStrategy()
+    private val nanopunkStrategy = NanopunkCircuitShaderStrategy()
 
     /**
      * Map of VoxelType to its corresponding VoxelMaterialProperties.

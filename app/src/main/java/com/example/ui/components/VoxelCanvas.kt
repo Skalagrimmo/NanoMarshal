@@ -3,6 +3,7 @@ package com.example.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -20,12 +21,18 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.*
+import com.example.engine.GaussianElimination
 import com.example.engine.GameState
+import com.example.engine.OpenGlVboRenderer
+import com.example.engine.VoronoiDiagram
 import com.example.engine.VoxelMaterialShader
 import com.example.engine.VoxelTerrain
 import com.example.ui.theme.*
 import kotlin.math.*
 import kotlin.random.Random
+
+private val reusableVisionConePath = Path()
+private val reusableWaypointArrowPath = Path()
 
 @Composable
 fun VoxelCanvas(
@@ -34,6 +41,7 @@ fun VoxelCanvas(
     modifier: Modifier = Modifier
 ) {
     val textMeasurer = rememberTextMeasurer()
+    val openGlVboRenderer = remember { OpenGlVboRenderer() }
 
     Canvas(
         modifier = modifier
@@ -73,7 +81,20 @@ fun VoxelCanvas(
                 dynamicLights = gameState.dynamicLights
             )
 
-            // 1b. Render Tactical Line-of-Sight & Flanking combat overlay rays
+            // 1b. Render Voronoi Diagram Tactical Territory Cells & OpenGL VBO Buffer Stream with Nanopunk GLSL Shaders
+            if (gameState.isTacticalGridOverlayEnabled && gameState.voronoiDiagram != null) {
+                val animTimeSec = (System.currentTimeMillis() % 100000L) / 1000f
+                openGlVboRenderer.beginFrame()
+                openGlVboRenderer.pushVoronoiDiagram(gameState.voronoiDiagram)
+                openGlVboRenderer.drawVboBridgeToCanvas(
+                    drawScope = this,
+                    timeSec = animTimeSec,
+                    nanopunkPreset = 0,
+                    glowIntensity = 1.35f
+                )
+            }
+
+            // 1c. Render Tactical Line-of-Sight & Flanking combat overlay rays
             if (gameState.isTacticalGridOverlayEnabled && player.isAlive) {
                 drawTacticalCombatOverlay(
                     gameState = gameState,
@@ -198,6 +219,7 @@ fun VoxelCanvas(
                         AIState.FLANKING -> "FLANK"
                         AIState.SEEKING_COVER -> "COVER"
                         AIState.ENGAGED -> "ENGAGE"
+                        AIState.SUPPRESSING -> "SUPPRESS"
                         AIState.RETREAT -> "RETREAT"
                         AIState.SUSPICIOUS, AIState.INVESTIGATING -> "ALERT"
                         else -> "!"
@@ -206,6 +228,7 @@ fun VoxelCanvas(
                         AIState.FLANKING -> PlasmaPink
                         AIState.SEEKING_COVER -> ShieldBlue
                         AIState.ENGAGED -> LaserRed
+                        AIState.SUPPRESSING -> HazardYellow
                         AIState.RETREAT -> HazardYellow
                         else -> HazardYellow
                     }
@@ -989,20 +1012,20 @@ private fun DrawScope.drawVisionCone(
     fovAngleRad: Float,
     color: Color
 ) {
-    val path = Path().apply {
-        moveTo(origin.x, origin.y)
-        val startAngle = facingAngle - fovAngleRad / 2f
-        val endAngle = facingAngle + fovAngleRad / 2f
-        val steps = 10
-        for (i in 0..steps) {
-            val a = startAngle + (endAngle - startAngle) * (i / steps.toFloat())
-            val px = origin.x + cos(a) * range
-            val py = origin.y + sin(a) * range
-            lineTo(px, py)
-        }
-        close()
+    reusableVisionConePath.reset()
+    reusableVisionConePath.moveTo(origin.x, origin.y)
+    val startAngle = facingAngle - fovAngleRad / 2f
+    val endAngle = facingAngle + fovAngleRad / 2f
+    val steps = 10
+    for (i in 0..steps) {
+        val a = startAngle + (endAngle - startAngle) * (i / steps.toFloat())
+        val px = origin.x + cos(a) * range
+        val py = origin.y + sin(a) * range
+        reusableVisionConePath.lineTo(px, py)
     }
-    drawPath(path = path, color = color)
+    reusableVisionConePath.close()
+
+    drawPath(path = reusableVisionConePath, color = color)
 }
 
 private fun DrawScope.drawDynamicLightBloomPass(dynamicLights: List<DynamicLight>) {
@@ -1257,22 +1280,21 @@ private fun DrawScope.drawOffscreenObjectiveWaypoints(
             val indicatorColor = if (obj.isPrimary) NanoCyan else HazardYellow
 
             // Draw Waypoint Arrow Triangle
-            val arrowPath = Path().apply {
-                val headX = clampedX + cos(angle) * 14f
-                val headY = clampedY + sin(angle) * 14f
-                val leftX = clampedX + cos(angle + 2.5f) * 10f
-                val leftY = clampedY + sin(angle + 2.5f) * 10f
-                val rightX = clampedX + cos(angle - 2.5f) * 10f
-                val rightY = clampedY + sin(angle - 2.5f) * 10f
+            reusableWaypointArrowPath.reset()
+            val headX = clampedX + cos(angle) * 14f
+            val headY = clampedY + sin(angle) * 14f
+            val leftX = clampedX + cos(angle + 2.5f) * 10f
+            val leftY = clampedY + sin(angle + 2.5f) * 10f
+            val rightX = clampedX + cos(angle - 2.5f) * 10f
+            val rightY = clampedY + sin(angle - 2.5f) * 10f
 
-                moveTo(headX, headY)
-                lineTo(leftX, leftY)
-                lineTo(rightX, rightY)
-                close()
-            }
+            reusableWaypointArrowPath.moveTo(headX, headY)
+            reusableWaypointArrowPath.lineTo(leftX, leftY)
+            reusableWaypointArrowPath.lineTo(rightX, rightY)
+            reusableWaypointArrowPath.close()
 
-            drawPath(path = arrowPath, color = indicatorColor)
-            drawPath(path = arrowPath, color = Color.White, style = Stroke(width = 1.5f))
+            drawPath(path = reusableWaypointArrowPath, color = indicatorColor)
+            drawPath(path = reusableWaypointArrowPath, color = Color.White, style = Stroke(width = 1.5f))
 
             // Distance in meters
             val distWorld = hypot(tx - player.x, ty - player.y)
