@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlin.math.*
 import kotlin.random.Random
+import android.util.Log
 
 data class Bullet(
     val id: String,
@@ -76,6 +77,8 @@ class GameEngine(
     val audioManager = AdaptiveAudioManager()
     val voronoiDiagram = VoronoiDiagram(maxX = mission.gridWidth * 64f, maxY = mission.gridHeight * 64f)
     val openGlVboRenderer = OpenGlVboRenderer()
+
+    private val spatialGrid = SpatialGrid(worldWidth = mission.gridWidth * 64f, worldHeight = mission.gridHeight * 64f, cellSize = 64f)
 
     private val _gameState = MutableStateFlow(GameState(currentMission = mission))
     val gameState: StateFlow<GameState> = _gameState.asStateFlow()
@@ -178,12 +181,27 @@ class GameEngine(
             currentMission = mission,
             objectives = objectiveManager.objectives
         )
+
+        // Initialize spatial grid for efficient enemy proximity queries
+        spatialGrid.rebuild(enemyList)
     }
 
     // 60 FPS Engine Tick Loop
     fun update(dtMs: Long) {
+        val frameStart = System.nanoTime()
         val currState = _gameState.value
         if (currState.isGameOver || currState.isPaused) return
+
+        // Log entity counts for profiling
+        val bulletCount = currState.bullets.size
+        val enemyCount = currState.enemies.size
+        val particleCount = currState.particles.size
+        if (bulletCount > 100 || enemyCount > 50 || particleCount > 200) {
+            Log.d("PERF", "Entity counts: bullets=$bulletCount enemies=$enemyCount particles=$particleCount")
+        }
+
+        // Update spatial grid for enemy proximity queries
+        spatialGrid.rebuild(currState.enemies)
 
         val now = System.currentTimeMillis()
         val deltaSec = dtMs / 1000f
@@ -260,6 +278,15 @@ class GameEngine(
         val hazardPositions = particles.filter { it.type == com.example.data.model.ParticleType.EXPLOSION_FLAME }
             .map { Pair(it.x, it.y) }
         voronoiDiagram.updateTacticalSites(player, enemies, hazardPositions)
+
+        val frameDurationNs = System.nanoTime() - frameStart
+        val frameDurationMs = frameDurationNs / 1_000_000
+        if (frameDurationMs > 16f) {
+            Log.d("PERF", "Frame took ${frameDurationMs}ms (target: 16ms / 60FPS)")
+            if (frameDurationMs > 32f) {
+                Log.w("PERF", "Slow frame: ${frameDurationMs}ms - potential gameplay impact")
+            }
+        }
 
         _gameState.value = currState.copy(
             player = player,
@@ -812,12 +839,12 @@ class GameEngine(
 
                         // Smart Target Seeking Ricochet: bend reflection toward nearest living enemy
                         var bestEnemyTarget: Enemy? = null
-                        var bestEnemyDist = Float.MAX_VALUE
+                        var bestEnemyDistSq = Float.MAX_VALUE
                         for (e in enemies) {
                             if (!e.isAlive) continue
-                            val edist = hypot(e.x - impactX, e.y - impactY)
-                            if (edist < 380f && edist < bestEnemyDist) {
-                                bestEnemyDist = edist
+                            val edistSq = (e.x - impactX) * (e.x - impactX) + (e.y - impactY) * (e.y - impactY)
+                            if (edistSq < 380f * 380f && edistSq < bestEnemyDistSq) {
+                                bestEnemyDistSq = edistSq
                                 bestEnemyTarget = e
                             }
                         }
@@ -825,11 +852,11 @@ class GameEngine(
                         if (bestEnemyTarget != null) {
                             val seekDx = bestEnemyTarget.x - impactX
                             val seekDy = bestEnemyTarget.y - impactY
-                            val seekDist = sqrt(seekDx * seekDx + seekDy * seekDy).coerceAtLeast(1f)
-                            val currentSpeed = sqrt(rx * rx + ry * ry)
+                            val seekDistSq = seekDx * seekDx + seekDy * seekDy
+                            val currentSpeedSq = rx * rx + ry * ry
 
-                            rx = rx * 0.35f + (seekDx / seekDist * currentSpeed) * 0.65f
-                            ry = ry * 0.35f + (seekDy / seekDist * currentSpeed) * 0.65f
+                            rx = rx * 0.35f + (seekDx / sqrt(seekDistSq) * sqrt(currentSpeedSq)) * 0.65f
+                            ry = ry * 0.35f + (seekDy / sqrt(seekDistSq) * sqrt(currentSpeedSq)) * 0.65f
                         }
 
                         b.vx = rx * 0.88f
@@ -880,10 +907,12 @@ class GameEngine(
 
             // Check Enemy hits if player bullet
             if (b.isPlayerBullet) {
-                for (e in enemies) {
+                // Use spatial grid to find only nearby enemies (radius ~26f = 1 tile)
+                val potentialHits = spatialGrid.queryRadius(b.x, b.y, 26f)
+                for (e in potentialHits) {
                     if (!e.isAlive) continue
-                    val dist = sqrt((b.x - e.x) * (b.x - e.x) + (b.y - e.y) * (b.y - e.y))
-                    if (dist < 26f) {
+                    val distSq = (b.x - e.x) * (b.x - e.x) + (b.y - e.y) * (b.y - e.y)
+                    if (distSq < 26f * 26f) {
                         // Flanking & Cover damage calculation
                         val hitAngle = atan2(b.y - e.y, b.x - e.x)
                         val angleDiff = abs(hitAngle - e.facingAngle)
@@ -936,8 +965,8 @@ class GameEngine(
                 }
             } else {
                 // Enemy bullet hits player
-                val dist = sqrt((b.x - player.x) * (b.x - player.x) + (b.y - player.y) * (b.y - player.y))
-                if (dist < 24f) {
+                val distSq = (b.x - player.x) * (b.x - player.x) + (b.y - player.y) * (b.y - player.y)
+                if (distSq < 24f * 24f) {
                     var dmg = b.damage
                     var wasMitigatedByCover = false
 

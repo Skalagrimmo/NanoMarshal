@@ -39,7 +39,7 @@ fun GameScreen(
 
     var isPaused by remember { mutableStateOf(false) }
 
-    // 60 FPS Game Engine Loop (16ms ticker)
+    // 60 FPS Game Engine Loop using coroutine
     LaunchedEffect(isPaused, gameState.isGameOver) {
         var lastTime = System.currentTimeMillis()
         while (!isPaused && !gameState.isGameOver) {
@@ -105,8 +105,9 @@ fun GameScreen(
         }
 
         // 4. Mission Victory Modal
-        if (gameState.isVictory) {
-            LaunchedEffect(Unit) {
+        val (victoryRecorded, setVictoryRecorded) = remember { mutableStateOf(false) }
+        if (gameState.isVictory && !victoryRecorded) {
+            LaunchedEffect(victoryRecorded) {
                 if (viewModel != null) {
                     viewModel.recordMissionVictory(
                         missionId = mission.id,
@@ -122,7 +123,9 @@ fun GameScreen(
                         coresEarned = mission.rewardCores
                     )
                 }
+                setVictoryRecorded(true)
             }
+        }
 
             Box(
                 modifier = Modifier
