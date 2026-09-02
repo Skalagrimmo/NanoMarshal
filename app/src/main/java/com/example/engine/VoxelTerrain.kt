@@ -287,6 +287,7 @@ class VoxelTerrain(
         val tile = tiles[gx][gy]
         if (!tile.isDestructible || tile.isDisintegrated) return false
 
+        tile.durability = (tile.durability - damage * 0.5f).coerceAtLeast(0f)
         tile.currentHp -= damage
         tile.hitFlashTimer = 1.0f
         tile.damageCracksCount += Random.nextInt(1, 3)
@@ -322,6 +323,8 @@ class VoxelTerrain(
                     tile.type = VoxelType.LOW_COVER_CRATE
                     tile.currentHp = 40f
                     tile.maxHp = 40f
+                    tile.durability = 40f
+                    tile.maxDurability = 40f
                     tile.damageCracksCount = 2
                 }
                 2 -> {
@@ -330,6 +333,8 @@ class VoxelTerrain(
                     tile.type = VoxelType.LOW_COVER_CRATE
                     tile.currentHp = 30f
                     tile.maxHp = 30f
+                    tile.durability = 30f
+                    tile.maxDurability = 30f
                     tile.damageCracksCount = 2
                 }
                 else -> {

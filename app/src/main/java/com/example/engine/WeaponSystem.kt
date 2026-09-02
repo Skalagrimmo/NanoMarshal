@@ -4,6 +4,7 @@ import androidx.compose.ui.graphics.Color
 import com.example.data.model.Particle
 import com.example.data.model.ParticleType
 import com.example.data.model.PlayerStance
+import com.example.data.model.ProjectileType
 import com.example.data.model.VoxelType
 import com.example.data.model.Weapon
 import com.example.data.model.WeaponDamageType
@@ -41,6 +42,7 @@ data class Projectile3D(
     val weapon: Weapon,
     val weaponType: WeaponType,
     val damageType: WeaponDamageType = weapon.damageType,
+    val projectileType: ProjectileType = weapon.projectileType,
     val isPlayerOwned: Boolean,
     val pierceCover: Boolean = false,
     val kineticForce: Float = 1.0f,
@@ -465,6 +467,18 @@ class WeaponSystem(
                     impactForce = proj.kineticForce
                 )
                 generatedParticles.addAll(impactParticles)
+
+                // Spawn destruction visual effects when voxel health reaches zero
+                if (damageResult?.wasDestroyed == true) {
+                    val destructionVfx = proj.weapon.createDestructionVisualEffects(
+                        voxel = voxelCell,
+                        projectileType = proj.projectileType,
+                        worldX = hit.hitX,
+                        worldY = hit.hitY,
+                        voxelType = voxelCell.type
+                    )
+                    generatedParticles.addAll(destructionVfx)
+                }
 
                 // Check explosive payloads
                 if (proj.isExplosive && proj.explosionRadius > 0f) {

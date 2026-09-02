@@ -3,6 +3,7 @@ package com.example.engine
 import androidx.compose.ui.graphics.Color
 import com.example.data.model.AIState
 import com.example.data.model.CoverHeight
+import com.example.data.model.DefaultWeapons
 import com.example.data.model.DynamicLight
 import com.example.data.model.DynamicLightType
 import com.example.data.model.Enemy
@@ -10,6 +11,7 @@ import com.example.data.model.Particle
 import com.example.data.model.ParticleType
 import com.example.data.model.PlayerStance
 import com.example.data.model.PlayerState
+import com.example.data.model.ProjectileType
 import com.example.data.model.VoxelDamageCalibrator
 import com.example.data.model.VoxelTile
 import com.example.data.model.VoxelType
@@ -310,6 +312,16 @@ class ProjectileManager(
                     if (wasDestroyed) {
                         destroyedVoxelCoords.add(Pair(tile.gridX, tile.gridY))
                         screenShakeAcc = screenShakeAcc.coerceAtLeast(if (isBarrel) 350L else 180L)
+
+                        val projType = ProjectileType.fromDamageType(damageType)
+                        val destructionVfx = DefaultWeapons.NEEDLE_PISTOL.createDestructionVisualEffects(
+                            voxel = tile,
+                            projectileType = projType,
+                            worldX = nextX,
+                            worldY = nextY,
+                            voxelType = tile.type
+                        )
+                        spawnedParticles.addAll(destructionVfx)
 
                         // If explosive barrel, trigger radial explosive destruction
                         if (isBarrel) {

@@ -1,6 +1,7 @@
 package com.example.engine
 
 import com.example.data.model.CoverHeight
+import com.example.data.model.DestructibleVoxel
 import com.example.data.model.VoxelType
 import kotlin.math.abs
 import kotlin.math.cos
@@ -107,8 +108,8 @@ data class DestructibleVoxelBlock(
     val z: Int,
     var type: VoxelType,
     var currentDurability: Float,
-    var maxDurability: Float,
-    var isDestructible: Boolean = true,
+    override var maxDurability: Float,
+    override var isDestructible: Boolean = true,
     var isSolid: Boolean = true,
     var coverHeight: CoverHeight = CoverHeight.NONE,
     var damageLevel: BlockDamageLevel = BlockDamageLevel.INTACT,
@@ -118,8 +119,34 @@ data class DestructibleVoxelBlock(
     var craterDepth: Float = 0f,
     var scorchIntensity: Float = 0f,
     var fracturePatternSeed: Int = Random.nextInt(),
-    var hitFlashTimer: Float = 0f
-) {
+    var hitFlashTimer: Float = 0f,
+    override var health: Float = currentDurability,
+    override var maxHealth: Float = maxDurability
+) : DestructibleVoxel {
+    override var durability: Float
+        get() = currentDurability
+        set(value) {
+            currentDurability = value
+        }
+
+    override val isDestroyed: Boolean
+        get() = health <= 0f || currentDurability <= 0f || !isSolid
+
+    override fun takeDamage(amount: Float, armorPenetration: Float): Float {
+        if (!isDestructible || !isSolid) return 0f
+        val effectiveDur = (currentDurability * (1.0f - armorPenetration.coerceIn(0f, 1f))).coerceAtLeast(0f)
+        val mitigation = (effectiveDur / (effectiveDur + 50f)).coerceIn(0f, 0.70f)
+        val healthDmg = amount * (1.0f - mitigation)
+        val durDmg = amount * (0.35f + mitigation * 0.50f)
+        currentDurability = (currentDurability - durDmg).coerceAtLeast(0f)
+        health = (health - healthDmg).coerceAtLeast(0f)
+        updateDamageLevel()
+        if (health <= 0f) {
+            isSolid = false
+        }
+        return healthDmg
+    }
+
     val remainingDurabilityRatio: Float
         get() = if (maxDurability > 0f) (currentDurability / maxDurability).coerceIn(0f, 1f) else 0f
 
@@ -174,8 +201,8 @@ data class VoxelRaycastHit(
 
 /**
  * VoxelManager manages the 3D procedural voxel grid, storing destructible block state,
- * material durability models, 3D raycasting, ballistics penetration, explosive blast waves,
- * and gravity-driven structural integrity checks.
+ * material durability models, procedural terrain generation with 3D Simplex noise height maps,
+ * 3D raycasting, ballistics penetration, explosive blast waves, and gravity structural integrity.
  */
 class VoxelManager(
     val width: Int = 32,
@@ -185,8 +212,23 @@ class VoxelManager(
 ) {
     private val materialCatalog = mutableMapOf<VoxelType, VoxelBlockDurabilitySpec>()
 
+    /**
+     * 3D Simplex noise generator for smooth, isotropic, non-directional procedural terrain synthesis.
+     */
+    val simplexNoise: SimplexNoise3D = SimplexNoise3D(1337L)
+
+    var currentSeed: Long = 1337L
+        private set
+
+    /**
+     * 2D terrain height map computed via 3D Simplex noise: [X][Y] -> height in grid/elevation units.
+     */
+    var heightMap: Array<FloatArray> = Array(width) { FloatArray(height) }
+        private set
+
     init {
         registerMaterialDefaults()
+        generateHeightMap(currentSeed)
     }
 
     // 3D Grid Storage [X][Y][Z]
@@ -328,20 +370,126 @@ class VoxelManager(
     }
 
     /**
+     * Generates a varied 2D terrain height map using 3D Simplex noise.
+     * Evaluates continuous 3D Simplex noise slices with multi-octave fractal synthesis
+     * and non-linear spline elevation mapping to generate diverse geographic contours,
+     * including low-lying tactical plazas, elevated platforms, terraced cliffs, and fortress plateaus.
+     *
+     * @param seed Randomization seed for the simplex noise generator.
+     * @param scale Horizontal spatial frequency for noise coordinates.
+     * @param octaves Number of fractal octaves combined for terrain roughness.
+     * @param lacunarity Frequency multiplier per octave.
+     * @param gain Amplitude decay per octave.
+     * @param heightScale Maximum vertical amplitude scale (defaults to depth - 1).
+     * @param spline Catmull-Rom spline curve used to shape raw noise into geological tiers.
+     * @return 2D FloatArray of calculated height values [x][y].
+     */
+    fun generateHeightMap(
+        seed: Long = currentSeed,
+        scale: Double = 0.065,
+        octaves: Int = 4,
+        lacunarity: Double = 2.05,
+        gain: Double = 0.48,
+        heightScale: Float = (depth - 1).toFloat(),
+        spline: SplineCurve = SplineCurve.ELEVATION
+    ): Array<FloatArray> {
+        currentSeed = seed
+        simplexNoise.reseed(seed)
+
+        for (x in 0 until width) {
+            for (y in 0 until height) {
+                val nx = x * scale
+                val ny = y * scale
+
+                // Sample 3D Simplex noise across vertical sampling slice for rich geological variation
+                val baseSimplex = simplexNoise.fractalNoise3D(
+                    x = nx,
+                    y = ny,
+                    z = 0.15,
+                    octaves = octaves,
+                    lacunarity = lacunarity,
+                    gain = gain
+                )
+
+                // Sample secondary 3D Simplex ridged slice for jagged cliff faces, ravines, and crags
+                val ridgedDetail = simplexNoise.ridgedNoise3D(
+                    x = nx * 1.8 + 12.3,
+                    y = ny * 1.8 + 45.6,
+                    z = 0.45,
+                    octaves = 3,
+                    lacunarity = 2.0,
+                    gain = 0.5
+                )
+
+                // Combine macro 3D simplex noise with ridged micro-detail
+                val combinedNoise = (baseSimplex * 0.75 + ridgedDetail * 0.25).coerceIn(0.0, 1.0)
+
+                // Pass through non-linear Catmull-Rom elevation spline curve
+                val mappedElevation = spline.evaluate(combinedNoise)
+
+                // Scale to world/grid height units
+                val finalHeight = (mappedElevation * heightScale).toFloat().coerceIn(0f, heightScale)
+                heightMap[x][y] = finalHeight
+            }
+        }
+        return heightMap
+    }
+
+    /**
+     * Returns the terrain height at grid coordinates (x, y).
+     */
+    fun getHeightAt(x: Int, y: Int): Float {
+        if (x in 0 until width && y in 0 until height) {
+            return heightMap[x][y]
+        }
+        return 0f
+    }
+
+    /**
+     * Returns the normalized terrain height in range [0.0, 1.0] at grid coordinates (x, y).
+     */
+    fun getNormalizedHeightAt(x: Int, y: Int): Float {
+        val maxHeight = (depth - 1).toFloat().coerceAtLeast(1f)
+        return (getHeightAt(x, y) / maxHeight).coerceIn(0f, 1f)
+    }
+
+    /**
+     * Returns the interpolated terrain height at world coordinates.
+     */
+    fun getHeightAtWorld(worldX: Float, worldY: Float): Float {
+        val gx = (worldX / voxelSize).toInt()
+        val gy = (worldY / voxelSize).toInt()
+        return getHeightAt(gx, gy)
+    }
+
+    /**
+     * Returns the complete 2D terrain height map array.
+     */
+    fun getTerrainHeightMap(): Array<FloatArray> = heightMap
+
+    /**
      * Procedurally populates the 3D voxel grid with multi-biome procedural generation
-     * sampling temperature and moisture noise maps to form distinct landscape biomes.
+     * using 3D Simplex noise to generate varied terrain height maps and volumetric voxel distribution.
      */
     fun generateProceduralWorld(seed: Long = 1337L) {
-        val fbm = FbmNoise(seed, defaultOctaves = 5, lacunarity = 2.1, gain = 0.48)
+        currentSeed = seed
+        simplexNoise.reseed(seed)
+
+        // 1. Generate varied terrain height map using 3D Simplex noise
+        generateHeightMap(seed = seed)
 
         for (x in 0 until width) {
             for (y in 0 until height) {
                 val nx = x * 0.08
                 val ny = y * 0.08
 
-                // Multi-biome climate sampling via FBM + Climate Splines
-                val tempVal = fbm.evalWithSpline(nx * 0.6 + 50.0, ny * 0.6 + 50.0, SplineCurve.BIOME_CLIMATE, octaves = 3)
-                val moistureVal = fbm.evalWithSpline(nx * 0.6 + 250.0, ny * 0.6 + 250.0, SplineCurve.BIOME_CLIMATE, octaves = 3)
+                // Multi-biome climate sampling via 3D Simplex noise + Climate Splines
+                val tempVal = simplexNoise.eval3DWithSpline(
+                    nx * 0.6 + 50.0, ny * 0.6 + 50.0, 0.2, SplineCurve.BIOME_CLIMATE, octaves = 3
+                )
+                val moistureVal = simplexNoise.eval3DWithSpline(
+                    nx * 0.6 + 250.0, ny * 0.6 + 250.0, 0.8, SplineCurve.BIOME_CLIMATE, octaves = 3
+                )
 
                 // Select biome based on climate noise thresholds
                 val biome = when {
@@ -352,9 +500,14 @@ class VoxelManager(
                 }
                 biomeGrid[x][y] = biome
 
-                val terrainElevation = (fbm.evalWithSpline(nx, ny, SplineCurve.ELEVATION, octaves = 4) * biome.elevationFactor).toFloat()
-                val objectDensity = (fbm.evalWithSpline(nx + 100.0, ny + 100.0, SplineCurve.OBJECT_DENSITY, octaves = 3) * biome.densityFactor).toFloat()
-                val hazardVal = (fbm.ridgedEvalWithSpline(nx + 200.0, ny + 200.0, SplineCurve.HAZARD, octaves = 3)).toFloat()
+                // Height map elevation derived from 3D Simplex noise
+                val terrainElevation = getNormalizedHeightAt(x, y) * biome.elevationFactor
+                val objectDensity = (simplexNoise.eval3DWithSpline(
+                    nx + 100.0, ny + 100.0, 0.5, SplineCurve.OBJECT_DENSITY, octaves = 3
+                ) * biome.densityFactor).toFloat()
+                val hazardVal = (simplexNoise.ridgedNoise3D(
+                    nx + 200.0, ny + 200.0, 0.3, octaves = 3
+                )).toFloat()
 
                 // Floor layer (z = 0)
                 grid[x][y][0] = if (hazardVal > (1.0f - biome.hazardChance) && objectDensity < 0.5f) {
@@ -365,7 +518,7 @@ class VoxelManager(
                     createDefaultBlock(x, y, 0, biome.secondaryFloor)
                 }
 
-                // Structures & Barriers (z = 1..depth-1)
+                // Structures & Barriers (z = 1..depth-1) based on 3D Simplex height map
                 for (z in 1 until depth) {
                     val isCorridor = abs(x - width / 2) <= 2 || abs(y - height / 2) <= 2
 
@@ -377,6 +530,7 @@ class VoxelManager(
                             grid[x][y][z] = createDefaultBlock(x, y, z, biome.primaryFloor).apply { isSolid = false }
                         }
                     } else {
+                        // Max structural height determined by 3D Simplex terrain height map
                         val maxStructureZ = (1 + (terrainElevation * (depth - 1)).toInt()).coerceIn(1, depth - 1)
 
                         val blockType = if (z <= maxStructureZ) {

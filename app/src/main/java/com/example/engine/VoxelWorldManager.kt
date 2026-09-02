@@ -1,6 +1,7 @@
 package com.example.engine
 
 import com.example.data.model.CoverHeight
+import com.example.data.model.DestructibleVoxel
 import com.example.data.model.VoxelTile
 import com.example.data.model.VoxelType
 import kotlin.math.atan2
@@ -56,7 +57,7 @@ data class Voxel3DCell(
     var isSolid: Boolean = true,
     var hp: Float = 100f,
     var maxHp: Float = 100f,
-    var isDestructible: Boolean = true,
+    override var isDestructible: Boolean = true,
     var deformationX: Float = 0f,
     var deformationY: Float = 0f,
     var deformationZ: Float = 0f,
@@ -64,8 +65,35 @@ data class Voxel3DCell(
     var craterDepth: Float = 0f,
     var scorchMarkIntensity: Float = 0f,
     var damageState: VoxelDamageState = VoxelDamageState.PRISTINE,
-    var hitFlashTimer: Float = 0f
-) {
+    var hitFlashTimer: Float = 0f,
+    override var durability: Float = 100f,
+    override var maxDurability: Float = 100f
+) : DestructibleVoxel {
+    override var health: Float
+        get() = hp
+        set(value) { hp = value }
+
+    override var maxHealth: Float
+        get() = maxHp
+        set(value) { maxHp = value }
+
+    override val isDestroyed: Boolean
+        get() = !isSolid || hp <= 0f
+
+    override fun takeDamage(amount: Float, armorPenetration: Float): Float {
+        if (!isDestructible || isDestroyed) return 0f
+        val effectiveDur = (durability * (1.0f - armorPenetration.coerceIn(0f, 1f))).coerceAtLeast(0f)
+        val mitigation = (effectiveDur / (effectiveDur + 50f)).coerceIn(0f, 0.70f)
+        val healthDmg = amount * (1.0f - mitigation)
+        val durDmg = amount * (0.35f + mitigation * 0.50f)
+        durability = (durability - durDmg).coerceAtLeast(0f)
+        hp = (hp - healthDmg).coerceAtLeast(0f)
+        if (hp <= 0f) {
+            isSolid = false
+            computeDamageState()
+        }
+        return healthDmg
+    }
     val damageRatio: Float
         get() = if (maxHp > 0f) (1f - (hp / maxHp)).coerceIn(0f, 1f) else 1f
 
