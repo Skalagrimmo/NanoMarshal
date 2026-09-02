@@ -1,7 +1,6 @@
 package com.example.engine
 
 import com.example.data.model.Enemy
-import kotlin.math.sqrt
 import kotlin.math.hypot
 
 /**
@@ -17,15 +16,9 @@ class SpatialGrid(
     val cellSize: Float = 64f // Match terrain tileSize for consistency
 ) {
     private val inverseCellSize: Float = 1f / cellSize
-    private val gridWidth: Int
-    private val gridHeight: Int
-    private val cells: MutableMap<Pair<Int, Int>, MutableSet<Enemy>>
-
-    init {
-        gridWidth = (worldWidth * inverseCellSize).coerceAtLeast(1)
-        gridHeight = (worldHeight * inverseCellSize).coerceAtLeast(1)
-        cells = MutableMap.withCapacity(gridWidth * gridHeight) { mutableSetOf<Enemy>() }
-    }
+    private val gridWidth: Int = (worldWidth * inverseCellSize).toInt().coerceAtLeast(1)
+    private val gridHeight: Int = (worldHeight * inverseCellSize).toInt().coerceAtLeast(1)
+    private val cells: MutableMap<Pair<Int, Int>, MutableSet<Enemy>> = HashMap()
 
     /** Add an enemy to the grid at its current world position. */
     fun add(enemy: Enemy) {
@@ -36,16 +29,15 @@ class SpatialGrid(
     /** Remove an enemy from the grid. Safe to call even if not present. */
     fun remove(enemy: Enemy) {
         val (gx, gy) = worldToGrid(enemy.x, enemy.y)
-        cells.get(gx to gy)?.enemy?.remove()
+        cells[gx to gy]?.remove(enemy)
     }
 
     /** Query all enemies within spherical radius from point (x, y). */
     fun queryRadius(x: Float, y: Float, radius: Float): List<Enemy> {
-        val rCells = (radius / cellSize).coerceAtLeast(1).toInt()
-        val gx0 = ((x - radius) * inverseCellSize).coerceAtLeast(0).toInt()
-        val gx1 = ((x + radius) * inverseCellSize).coerceAtMost(gridWidth - 1).toInt()
-        val gy0 = ((y - radius) * inverseCellSize).coerceAtLeast(0).toInt()
-        val gy1 = ((y + radius) * inverseCellSize).coerceAtMost(gridHeight - 1).toInt()
+        val gx0 = ((x - radius) * inverseCellSize).toInt().coerceIn(0, gridWidth - 1)
+        val gx1 = ((x + radius) * inverseCellSize).toInt().coerceIn(0, gridWidth - 1)
+        val gy0 = ((y - radius) * inverseCellSize).toInt().coerceIn(0, gridHeight - 1)
+        val gy1 = ((y + radius) * inverseCellSize).toInt().coerceIn(0, gridHeight - 1)
 
         val result = mutableListOf<Enemy>()
 
@@ -68,19 +60,24 @@ class SpatialGrid(
     }
 
     /** Convert world coordinates to grid cell indices. */
-    private fun worldToGrid(x: Float, y: Int): Pair<Int, Int> {
-        return ((x * inverseCellSize).coerceAtLeast(0).toInt().coerceIn(0, gridWidth - 1),
-                (y * inverseCellSize).coerceAtLeast(0).toInt().coerceIn(0, gridHeight - 1))
+    private fun worldToGrid(x: Float, y: Float): Pair<Int, Int> {
+        val gx = (x * inverseCellSize).toInt().coerceIn(0, gridWidth - 1)
+        val gy = (y * inverseCellSize).toInt().coerceIn(0, gridHeight - 1)
+        return Pair(gx, gy)
     }
 
     /** Rebuild grid entries for all enemies (call after mass position changes or init). */
     fun rebuild(enemies: List<Enemy>) {
         // Clear all cells
-        for (cell in cells.values) cell.clear()
+        for (cell in cells.values) {
+            cell.clear()
+        }
 
         // Re-add all enemies
         for (enemy in enemies) {
-            add(enemy)
+            if (enemy.isAlive) {
+                add(enemy)
+            }
         }
     }
 }

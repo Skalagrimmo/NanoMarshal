@@ -175,13 +175,57 @@ class VoxelTerrain(
                     }
 
                     // Explosive Plasma Barrel Hotspots
-                    objectDensityVal in 0.48..0.54 && hazardVal > 0.60 -> {
+                    objectDensityVal in 0.48..0.54 && hazardVal > 0.65 -> {
                         tiles[x][y] = VoxelTile(
                             gridX = x, gridY = y, elevationZ = 1,
                             type = VoxelType.EXPLOSIVE_BARREL,
                             currentHp = 40f, maxHp = 40f,
                             isDestructible = true,
                             coverHeight = CoverHeight.LOW
+                        )
+                    }
+
+                    // Procedural Nanite Gas Vents in high hazard/chemical pockets
+                    hazardVal in 0.58..0.68 && objectDensityVal in 0.44..0.52 -> {
+                        tiles[x][y] = VoxelTile(
+                            gridX = x, gridY = y, elevationZ = 1,
+                            type = VoxelType.NANITE_GAS_VENT,
+                            currentHp = 50f, maxHp = 50f,
+                            isDestructible = true,
+                            coverHeight = CoverHeight.LOW
+                        )
+                    }
+
+                    // Procedural High-Voltage Electric Conduits along metal/corridor junctions
+                    objectDensityVal in 0.52..0.60 && elevationVal in 0.52..0.64 -> {
+                        tiles[x][y] = VoxelTile(
+                            gridX = x, gridY = y, elevationZ = 2,
+                            type = VoxelType.ELECTRIC_CONDUIT,
+                            currentHp = 70f, maxHp = 70f,
+                            isDestructible = true,
+                            coverHeight = CoverHeight.HIGH
+                        )
+                    }
+
+                    // Procedural Cryo Coolant Manifolds
+                    hazardVal in 0.50..0.58 && objectDensityVal in 0.46..0.54 -> {
+                        tiles[x][y] = VoxelTile(
+                            gridX = x, gridY = y, elevationZ = 1,
+                            type = VoxelType.CRYO_PIPE,
+                            currentHp = 60f, maxHp = 60f,
+                            isDestructible = true,
+                            coverHeight = CoverHeight.LOW
+                        )
+                    }
+
+                    // Procedural Plasma Core Generators in tactical heavy nodes
+                    objectDensityVal in 0.66..0.72 && hazardVal in 0.54..0.66 -> {
+                        tiles[x][y] = VoxelTile(
+                            gridX = x, gridY = y, elevationZ = 2,
+                            type = VoxelType.PLASMA_GENERATOR,
+                            currentHp = 120f, maxHp = 120f,
+                            isDestructible = true,
+                            coverHeight = CoverHeight.HIGH
                         )
                     }
 

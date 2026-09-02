@@ -652,6 +652,276 @@ class NanopunkCircuitShaderStrategy : VoxelMaterialShaderStrategy {
 }
 
 /**
+ * Shader Strategy for Pressurized Nanite Gas Vents / Chemical Canisters.
+ * Features pressurized valve gauges, corrosive green containment casing, and pulsing vapor nozzles.
+ */
+class NaniteGasVentShaderStrategy : VoxelMaterialShaderStrategy {
+    override fun drawMaterialBlock(
+        drawScope: DrawScope,
+        halfW: Float,
+        halfH: Float,
+        tile: VoxelTile,
+        material: VoxelMaterialProperties,
+        animTimeSec: Float,
+        lightIntensity: Float,
+        lightDirX: Float,
+        lightDirY: Float,
+        addR: Float,
+        addG: Float,
+        addB: Float
+    ) {
+        val blockW = halfW * 2f
+        val blockH = halfH * 2f
+
+        // Dark Biohazard Container Frame
+        val baseDark = Color(0xFF064E3B)
+        drawScope.drawRoundRect(
+            color = baseDark,
+            topLeft = Offset(-halfW, -halfH),
+            size = Size(blockW, blockH),
+            cornerRadius = CornerRadius(8f)
+        )
+
+        // Corrosive Green Glow Pulse
+        val pulse = (sin(animTimeSec * 5.0 + tile.gridX * 0.2) * 0.5 + 0.5).toFloat()
+        val bioGreen = Color(0xFF10B981)
+
+        // Center Gas Valve / Pressure Core
+        drawScope.drawCircle(
+            color = bioGreen.copy(alpha = 0.6f + pulse * 0.35f),
+            radius = halfW * 0.55f,
+            center = Offset(0f, 0f)
+        )
+        drawScope.drawCircle(
+            color = Color(0xFF34D399),
+            radius = halfW * 0.3f,
+            center = Offset(0f, 0f)
+        )
+        drawScope.drawCircle(
+            color = Color.White,
+            radius = halfW * 0.12f,
+            center = Offset(0f, 0f)
+        )
+
+        // 4 Vent Nozzles on Edges
+        val nozzleLen = 5f
+        drawScope.drawLine(bioGreen, Offset(0f, -halfH), Offset(0f, -halfH + nozzleLen), strokeWidth = 3f)
+        drawScope.drawLine(bioGreen, Offset(0f, halfH), Offset(0f, halfH - nozzleLen), strokeWidth = 3f)
+        drawScope.drawLine(bioGreen, Offset(-halfW, 0f), Offset(-halfW + nozzleLen, 0f), strokeWidth = 3f)
+        drawScope.drawLine(bioGreen, Offset(halfW, 0f), Offset(halfW - nozzleLen, 0f), strokeWidth = 3f)
+
+        // Biohazard Border
+        drawScope.drawRoundRect(
+            color = bioGreen,
+            topLeft = Offset(-halfW, -halfH),
+            size = Size(blockW, blockH),
+            cornerRadius = CornerRadius(8f),
+            style = Stroke(width = 2f)
+        )
+    }
+}
+
+/**
+ * Shader Strategy for High-Voltage Electric Conduits & Tesla Transformer Junctions.
+ * Features high-voltage cyan lightning coils, pulsing electrical arcing, and copper insulator nodes.
+ */
+class ElectricConduitShaderStrategy : VoxelMaterialShaderStrategy {
+    override fun drawMaterialBlock(
+        drawScope: DrawScope,
+        halfW: Float,
+        halfH: Float,
+        tile: VoxelTile,
+        material: VoxelMaterialProperties,
+        animTimeSec: Float,
+        lightIntensity: Float,
+        lightDirX: Float,
+        lightDirY: Float,
+        addR: Float,
+        addG: Float,
+        addB: Float
+    ) {
+        val blockW = halfW * 2f
+        val blockH = halfH * 2f
+
+        // Heavy Metallic Transformer Frame
+        drawScope.drawRoundRect(
+            color = Color(0xFF0F172A),
+            topLeft = Offset(-halfW, -halfH),
+            size = Size(blockW, blockH),
+            cornerRadius = CornerRadius(6f)
+        )
+
+        val cyanGlow = Color(0xFF00F0FF)
+        val sparkPhase = (animTimeSec * 12.0) % 1.0
+
+        // High Voltage Insulator Coils
+        val coilY = -halfH + 8f
+        val coilH = blockH - 16f
+        drawScope.drawRect(
+            color = Color(0xFF1E293B),
+            topLeft = Offset(-halfW + 8f, coilY),
+            size = Size(blockW - 16f, coilH)
+        )
+
+        // Electric Sparking Lightning Filament in Center
+        val sparkAlpha = (sin(animTimeSec * 18.0) * 0.4 + 0.6).toFloat()
+        val path = Path()
+        path.moveTo(-halfW + 10f, 0f)
+        path.lineTo(-halfW * 0.3f, if (sparkPhase > 0.5) -6f else 6f)
+        path.lineTo(halfW * 0.2f, if (sparkPhase > 0.5) 7f else -5f)
+        path.lineTo(halfW - 10f, 0f)
+
+        drawScope.drawPath(
+            path = path,
+            color = cyanGlow.copy(alpha = sparkAlpha),
+            style = Stroke(width = 2.5f)
+        )
+
+        // Glowing Core Terminal
+        drawScope.drawCircle(
+            color = Color.White.copy(alpha = sparkAlpha),
+            radius = 3.5f,
+            center = Offset(0f, 0f)
+        )
+
+        // Outer Neon Arc Trim
+        drawScope.drawRoundRect(
+            color = cyanGlow.copy(alpha = 0.9f),
+            topLeft = Offset(-halfW, -halfH),
+            size = Size(blockW, blockH),
+            cornerRadius = CornerRadius(6f),
+            style = Stroke(width = 2f)
+        )
+    }
+}
+
+/**
+ * Shader Strategy for Cryo Manifolds and Subzero Coolant Pipelines.
+ */
+class CryoPipeShaderStrategy : VoxelMaterialShaderStrategy {
+    override fun drawMaterialBlock(
+        drawScope: DrawScope,
+        halfW: Float,
+        halfH: Float,
+        tile: VoxelTile,
+        material: VoxelMaterialProperties,
+        animTimeSec: Float,
+        lightIntensity: Float,
+        lightDirX: Float,
+        lightDirY: Float,
+        addR: Float,
+        addG: Float,
+        addB: Float
+    ) {
+        val blockW = halfW * 2f
+        val blockH = halfH * 2f
+
+        // Frosted Steel Base
+        drawScope.drawRoundRect(
+            color = Color(0xFF0C4A6E),
+            topLeft = Offset(-halfW, -halfH),
+            size = Size(blockW, blockH),
+            cornerRadius = CornerRadius(6f)
+        )
+
+        val frostCyan = Color(0xFF38BDF8)
+        val pulse = (sin(animTimeSec * 3.0) * 0.3 + 0.7).toFloat()
+
+        // Cryo Pipe Cylinder in Center
+        drawScope.drawRoundRect(
+            color = Color(0xFFE0F2FE).copy(alpha = 0.8f * pulse),
+            topLeft = Offset(-halfW + 6f, -halfH * 0.4f),
+            size = Size(blockW - 12f, halfH * 0.8f),
+            cornerRadius = CornerRadius(4f)
+        )
+
+        // Ice Crystal Snowflake Cross
+        val crystalSize = 7f
+        drawScope.drawLine(Color.White, Offset(-crystalSize, 0f), Offset(crystalSize, 0f), strokeWidth = 2f)
+        drawScope.drawLine(Color.White, Offset(0f, -crystalSize), Offset(0f, crystalSize), strokeWidth = 2f)
+        drawScope.drawLine(Color.White, Offset(-crystalSize * 0.7f, -crystalSize * 0.7f), Offset(crystalSize * 0.7f, crystalSize * 0.7f), strokeWidth = 1.5f)
+        drawScope.drawLine(Color.White, Offset(-crystalSize * 0.7f, crystalSize * 0.7f), Offset(crystalSize * 0.7f, -crystalSize * 0.7f), strokeWidth = 1.5f)
+
+        // Frost Bevel Border
+        drawScope.drawRoundRect(
+            color = frostCyan,
+            topLeft = Offset(-halfW, -halfH),
+            size = Size(blockW, blockH),
+            cornerRadius = CornerRadius(6f),
+            style = Stroke(width = 2f)
+        )
+    }
+}
+
+/**
+ * Shader Strategy for Heavy Plasma Reactor Core Generators.
+ */
+class PlasmaGeneratorShaderStrategy : VoxelMaterialShaderStrategy {
+    override fun drawMaterialBlock(
+        drawScope: DrawScope,
+        halfW: Float,
+        halfH: Float,
+        tile: VoxelTile,
+        material: VoxelMaterialProperties,
+        animTimeSec: Float,
+        lightIntensity: Float,
+        lightDirX: Float,
+        lightDirY: Float,
+        addR: Float,
+        addG: Float,
+        addB: Float
+    ) {
+        val blockW = halfW * 2f
+        val blockH = halfH * 2f
+
+        // Heavy Armored Core Housing
+        drawScope.drawRoundRect(
+            color = Color(0xFF1C1917),
+            topLeft = Offset(-halfW, -halfH),
+            size = Size(blockW, blockH),
+            cornerRadius = CornerRadius(8f)
+        )
+
+        val amber = Color(0xFFF59E0B)
+        val orange = Color(0xFFFF5500)
+        val rotAngle = animTimeSec * 2.5f
+
+        // Rotating Magnetic Containment Coils
+        for (i in 0 until 4) {
+            val a = rotAngle + i * (Math.PI.toFloat() / 2f)
+            val cx = cos(a) * (halfW * 0.5f)
+            val cy = sin(a) * (halfH * 0.5f)
+            drawScope.drawCircle(
+                color = amber.copy(alpha = 0.85f),
+                radius = 3.5f,
+                center = Offset(cx, cy)
+            )
+        }
+
+        // Thermonuclear Core Center
+        drawScope.drawCircle(
+            color = orange,
+            radius = halfW * 0.45f,
+            center = Offset(0f, 0f)
+        )
+        drawScope.drawCircle(
+            color = Color.White,
+            radius = halfW * 0.22f,
+            center = Offset(0f, 0f)
+        )
+
+        // Hazard Border Frame
+        drawScope.drawRoundRect(
+            color = amber,
+            topLeft = Offset(-halfW, -halfH),
+            size = Size(blockW, blockH),
+            cornerRadius = CornerRadius(8f),
+            style = Stroke(width = 2.5f)
+        )
+    }
+}
+
+/**
  * Central VoxelMaterialShader Registry & Dispatcher engine for VoxelWorldManager.
  */
 object VoxelMaterialShader {
@@ -662,6 +932,10 @@ object VoxelMaterialShader {
     private val volatileHazardStrategy = VolatileHazardShaderStrategy()
     private val defaultStoneStrategy = DefaultStoneShaderStrategy()
     private val nanopunkStrategy = NanopunkCircuitShaderStrategy()
+    private val naniteGasVentStrategy = NaniteGasVentShaderStrategy()
+    private val electricConduitStrategy = ElectricConduitShaderStrategy()
+    private val cryoPipeStrategy = CryoPipeShaderStrategy()
+    private val plasmaGeneratorStrategy = PlasmaGeneratorShaderStrategy()
 
     /**
      * Map of VoxelType to its corresponding VoxelMaterialProperties.
@@ -732,6 +1006,58 @@ object VoxelMaterialShader {
                 fractureResilience = 0.4f
             )
 
+            VoxelType.NANITE_GAS_VENT -> VoxelMaterialProperties(
+                type = VoxelMaterialType.VOLATILE_HAZARD,
+                name = "Nanite Gas Vent",
+                baseColor = Color(0xFF064E3B),
+                secondaryColor = Color(0xFF022C22),
+                specularColor = Color(0xFF34D399),
+                glowColor = Color(0xFF10B981),
+                roughness = 0.25f,
+                pulseRate = 3.0f,
+                isGlowing = true,
+                fractureResilience = 0.8f
+            )
+
+            VoxelType.ELECTRIC_CONDUIT -> VoxelMaterialProperties(
+                type = VoxelMaterialType.ENERGY_PLASMA,
+                name = "Electric Conduit",
+                baseColor = Color(0xFF0F172A),
+                secondaryColor = Color(0xFF0284C7),
+                specularColor = Color(0xFF00F0FF),
+                glowColor = Color(0xFF38BDF8),
+                roughness = 0.15f,
+                pulseRate = 5.0f,
+                isGlowing = true,
+                fractureResilience = 0.7f
+            )
+
+            VoxelType.CRYO_PIPE -> VoxelMaterialProperties(
+                type = VoxelMaterialType.VOLATILE_HAZARD,
+                name = "Cryo Pipe",
+                baseColor = Color(0xFF0C4A6E),
+                secondaryColor = Color(0xFF082F49),
+                specularColor = Color(0xFFBAE6FD),
+                glowColor = Color(0xFF38BDF8),
+                roughness = 0.2f,
+                pulseRate = 2.0f,
+                isGlowing = true,
+                fractureResilience = 0.8f
+            )
+
+            VoxelType.PLASMA_GENERATOR -> VoxelMaterialProperties(
+                type = VoxelMaterialType.VOLATILE_HAZARD,
+                name = "Plasma Generator",
+                baseColor = Color(0xFF292524),
+                secondaryColor = Color(0xFF1C1917),
+                specularColor = Color(0xFFFDE68A),
+                glowColor = Color(0xFFF59E0B),
+                roughness = 0.3f,
+                pulseRate = 4.0f,
+                isGlowing = true,
+                fractureResilience = 1.4f
+            )
+
             else -> VoxelMaterialProperties(
                 type = VoxelMaterialType.PLAZA_STONE,
                 name = "Plaza Masonry",
@@ -753,6 +1079,10 @@ object VoxelMaterialShader {
             VoxelType.ALIEN_BIOMASS, VoxelType.ACID_POOL -> alienBiomassStrategy
             VoxelType.ENERGY_BARRIER, VoxelType.OBJECTIVE_NODE -> energyPlasmaStrategy
             VoxelType.EXPLOSIVE_BARREL -> volatileHazardStrategy
+            VoxelType.NANITE_GAS_VENT -> naniteGasVentStrategy
+            VoxelType.ELECTRIC_CONDUIT -> electricConduitStrategy
+            VoxelType.CRYO_PIPE -> cryoPipeStrategy
+            VoxelType.PLASMA_GENERATOR -> plasmaGeneratorStrategy
             else -> defaultStoneStrategy
         }
     }

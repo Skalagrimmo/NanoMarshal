@@ -34,6 +34,16 @@ data class VoxelDamageResult(
 )
 
 /**
+ * Result summary of voxel destruction triggered when the player fires.
+ */
+data class PlayerFireDestructionResult(
+    val impactPoint: Vector3D?,
+    val damagedVoxels: List<VoxelDamageResult>,
+    val destroyedVoxelCoordinates: List<Pair<Int, Int>>,
+    val penetratedCount: Int
+)
+
+/**
  * 3D Voxel Cell representing an individual volume element in the 3D grid,
  * supporting damage states, mesh deformation, strain vectors, and destruction mechanics.
  */
@@ -328,13 +338,119 @@ class VoxelWorldManager(
     }
 
     /**
+     * Check if coordinates are within the 3D grid bounds.
+     */
+    fun isInBounds(x: Int, y: Int, z: Int): Boolean {
+        return x in 0 until width && y in 0 until height && z in 0 until maxDepth
+    }
+
+    /**
      * Query 3D voxel cell at specific grid coordinates.
      */
     fun get3DVoxel(x: Int, y: Int, z: Int): Voxel3DCell? {
-        if (x in 0 until width && y in 0 until height && z in 0 until maxDepth) {
+        if (isInBounds(x, y, z)) {
             return voxelGrid3D[x][y][z]
         }
         return null
+    }
+
+    /**
+     * Check if a 3D voxel coordinate is in an empty / non-solid state.
+     */
+    fun isVoxelEmpty(x: Int, y: Int, z: Int): Boolean {
+        val cell = get3DVoxel(x, y, z) ?: return true
+        return !cell.isSolid || cell.hp <= 0f || cell.damageState == VoxelDamageState.DESTROYED
+    }
+
+    /**
+     * Sets a specific voxel coordinate to an empty state, implementing basic destructibility.
+     * Clears solidity, zeros out density & HP, marks destroyed state, and synchronizes surface terrain.
+     *
+     * @return true if the voxel was previously solid and transitioned to empty state, false otherwise.
+     */
+    fun setEmpty(x: Int, y: Int, z: Int): Boolean {
+        val cell = get3DVoxel(x, y, z) ?: return false
+        val wasSolid = cell.isSolid
+
+        cell.isSolid = false
+        cell.density = 0f
+        cell.hp = 0f
+        cell.damageState = VoxelDamageState.DESTROYED
+        cell.craterDepth = 32f
+
+        syncVoxelCellToSurfaceTile(x, y)
+        if (wasSolid) {
+            rebuildWorldSvdag()
+        }
+        return wasSolid
+    }
+
+    /**
+     * Alias for [setEmpty] to explicitly set a voxel coordinate to an empty state.
+     */
+    fun setVoxelEmpty(x: Int, y: Int, z: Int): Boolean = setEmpty(x, y, z)
+
+    /**
+     * Clears a specific voxel coordinate to an empty state.
+     */
+    fun clearVoxel(x: Int, y: Int, z: Int): Boolean = setEmpty(x, y, z)
+
+    /**
+     * Destroys a specific voxel coordinate, transitioning it to destroyed empty state.
+     */
+    fun destroyVoxel(x: Int, y: Int, z: Int): Boolean = setEmpty(x, y, z)
+
+    /**
+     * Updates or sets a voxel at specific coordinates with a defined type, solidity, and HP.
+     */
+    fun setVoxel(
+        x: Int, y: Int, z: Int,
+        type: VoxelType = VoxelType.FLOOR_DIRT,
+        isSolid: Boolean = true,
+        hp: Float = 100f,
+        maxHp: Float = 100f
+    ): Boolean {
+        val cell = get3DVoxel(x, y, z) ?: return false
+        cell.type = type
+        cell.isSolid = isSolid
+        cell.hp = if (isSolid) hp else 0f
+        cell.maxHp = if (isSolid) maxHp else 0f
+        cell.density = if (isSolid) (hp / maxHp.coerceAtLeast(1f)).coerceIn(0f, 1f) else 0f
+        cell.computeDamageState()
+
+        syncVoxelCellToSurfaceTile(x, y)
+        rebuildWorldSvdag()
+        return true
+    }
+
+    /**
+     * Destroys all voxels within a discrete grid radius around (gx, gy, gz) setting them to empty.
+     */
+    fun destroyVoxelRadius(gx: Int, gy: Int, gz: Int, radius: Int): Int {
+        var count = 0
+        val minX = (gx - radius).coerceIn(0, width - 1)
+        val maxX = (gx + radius).coerceIn(0, width - 1)
+        val minY = (gy - radius).coerceIn(0, height - 1)
+        val maxY = (gy + radius).coerceIn(0, height - 1)
+        val minZ = (gz - radius).coerceIn(0, maxDepth - 1)
+        val maxZ = (gz + radius).coerceIn(0, maxDepth - 1)
+
+        val rSq = radius * radius
+        for (x in minX..maxX) {
+            for (y in minY..maxY) {
+                for (z in minZ..maxZ) {
+                    val dx = x - gx
+                    val dy = y - gy
+                    val dz = z - gz
+                    if (dx * dx + dy * dy + dz * dz <= rSq) {
+                        if (setEmpty(x, y, z)) {
+                            count++
+                        }
+                    }
+                }
+            }
+        }
+        return count
     }
 
     /**
@@ -579,6 +695,130 @@ class VoxelWorldManager(
             lod0Count = svdagEngine.lod0Count,
             lod1Count = svdagEngine.lod1Count,
             lod2Count = svdagEngine.lod2Count
+        )
+    }
+
+    /**
+     * Modifies the voxel grid data structure when the player fires, allowing for real-time
+     * destruction of terrain blocks along the projectile trajectory.
+     *
+     * Performs continuous sub-stepping collision detection through the 3D voxel volume,
+     * applies material-calibrated point damage & deformation to impacted voxel cells,
+     * triggers explosive radial blasts for explosive weapons/barrels, and synchronizes
+     * surface terrain and SVDAG tree structures.
+     *
+     * @param originX Starting world X position of the player's shot.
+     * @param originY Starting world Y position of the player's shot.
+     * @param originZ Starting world Z position of the player's shot (default 1.5f).
+     * @param aimAngle Aim direction angle in radians.
+     * @param damage Base damage value of the fired shot.
+     * @param damageType Specific energy or kinetic damage category.
+     * @param maxDistance Maximum travel distance of the shot.
+     * @param kineticForce Physical impact impulse for mesh deformation.
+     * @param isExplosive True if the shot causes radial explosive terrain destruction.
+     * @param explosionRadius Radius of radial voxel blast if explosive.
+     * @param pierceCover Whether the shot can penetrate through destroyed blocks.
+     * @return [PlayerFireDestructionResult] containing all impacted, damaged, and destroyed voxel blocks.
+     */
+    fun processPlayerFireDestruction(
+        originX: Float,
+        originY: Float,
+        originZ: Float = 1.5f,
+        aimAngle: Float,
+        damage: Float,
+        damageType: com.example.data.model.WeaponDamageType = com.example.data.model.WeaponDamageType.KINETIC,
+        maxDistance: Float = 800f,
+        kineticForce: Float = 1.0f,
+        isExplosive: Boolean = false,
+        explosionRadius: Float = 0f,
+        pierceCover: Boolean = false
+    ): PlayerFireDestructionResult {
+        val dirX = cos(aimAngle)
+        val dirY = sin(aimAngle)
+        val dirZ = 0f
+
+        val damagedCells = mutableListOf<VoxelDamageResult>()
+        val destroyedVoxels = mutableListOf<Pair<Int, Int>>()
+        var remainingDamage = damage
+        var currentOriginX = originX
+        var currentOriginY = originY
+        var currentOriginZ = originZ
+        var totalDistanceTraveled = 0f
+        var primaryHitLocation: Vector3D? = null
+
+        while (totalDistanceTraveled < maxDistance && remainingDamage > 0f) {
+            val stepMaxDist = maxDistance - totalDistanceTraveled
+            val hit = raycast3D(
+                startX = currentOriginX,
+                startY = currentOriginY,
+                startZ = currentOriginZ,
+                dirX = dirX,
+                dirY = dirY,
+                dirZ = dirZ,
+                maxDistance = stepMaxDist
+            ) ?: break
+
+            if (primaryHitLocation == null) {
+                primaryHitLocation = Vector3D(hit.hitX, hit.hitY, hit.hitZ)
+            }
+
+            totalDistanceTraveled += hit.distance
+            val gx = hit.gridX
+            val gy = hit.gridY
+            val gz = hit.gridZ
+            val cell = hit.voxel
+
+            // Calibrate damage against material properties
+            val multiplier = com.example.data.model.VoxelDamageCalibrator.getDamageMultiplier(damageType, cell.type)
+            val effectiveDmg = remainingDamage * multiplier
+
+            // Apply direct point damage & deformation to the 3D voxel cell
+            val dmgResult = applyVoxelDamage(
+                gx = gx,
+                gy = gy,
+                gz = gz,
+                amount = effectiveDmg,
+                impactAngle = aimAngle,
+                impactForce = kineticForce
+            )
+
+            if (dmgResult != null) {
+                damagedCells.add(dmgResult)
+                if (dmgResult.wasDestroyed) {
+                    destroyedVoxels.add(Pair(gx, gy))
+                }
+            }
+
+            // If weapon has explosive properties or hit an explosive barrel, detonate radial destruction
+            if (isExplosive && explosionRadius > 0f || cell.type == VoxelType.EXPLOSIVE_BARREL) {
+                val blastRad = if (cell.type == VoxelType.EXPLOSIVE_BARREL) 180f else explosionRadius
+                val blastDmg = if (cell.type == VoxelType.EXPLOSIVE_BARREL) 300f else effectiveDmg * 1.5f
+                val blastDestroyed = applyExplosion3D(
+                    worldX = hit.hitX,
+                    worldY = hit.hitY,
+                    radiusWorld = blastRad,
+                    damage = blastDmg
+                )
+                destroyedVoxels.addAll(blastDestroyed)
+                break
+            }
+
+            // Check cover penetration
+            if (pierceCover && dmgResult?.wasDestroyed == true) {
+                remainingDamage *= 0.70f
+                currentOriginX = hit.hitX + dirX * 6f
+                currentOriginY = hit.hitY + dirY * 6f
+                currentOriginZ = hit.hitZ
+            } else {
+                break
+            }
+        }
+
+        return PlayerFireDestructionResult(
+            impactPoint = primaryHitLocation,
+            damagedVoxels = damagedCells,
+            destroyedVoxelCoordinates = destroyedVoxels.distinct(),
+            penetratedCount = (damagedCells.size - 1).coerceAtLeast(0)
         )
     }
 

@@ -67,18 +67,15 @@ fun VoxelCanvas(
         withTransform({
             translate(left = -cameraX, top = -cameraY)
         }) {
-            // 1. Render Ground Terrain Grid & Tactical Overlay
+            // 1. Render Ground Terrain Grid & Tactical Overlay with Fog-of-War
             drawTerrainGrid(
                 terrain = terrain,
                 cameraX = cameraX,
                 cameraY = cameraY,
                 canvasWidth = canvasWidth,
                 canvasHeight = canvasHeight,
-                playerX = player.x,
-                playerY = player.y,
-                isTacticalOverlayEnabled = gameState.isTacticalGridOverlayEnabled,
-                textMeasurer = textMeasurer,
-                dynamicLights = gameState.dynamicLights
+                gameState = gameState,
+                textMeasurer = textMeasurer
             )
 
             // 1b. Render Voronoi Diagram Tactical Territory Cells & OpenGL VBO Buffer Stream with Nanopunk GLSL Shaders
@@ -103,6 +100,28 @@ fun VoxelCanvas(
                 )
             }
 
+            // 1d. Render Active Recon Radar / Sonar Sweeps
+            for (ping in gameState.activeRadarPings) {
+                val pingAlpha = (ping.life * 0.9f).coerceIn(0f, 1f)
+                drawCircle(
+                    color = NanoCyan.copy(alpha = pingAlpha * 0.8f),
+                    radius = ping.currentRadius,
+                    center = Offset(ping.originX, ping.originY),
+                    style = Stroke(width = 3.5f)
+                )
+                drawCircle(
+                    color = Color.White.copy(alpha = pingAlpha * 0.7f),
+                    radius = (ping.currentRadius - 4f).coerceAtLeast(1f),
+                    center = Offset(ping.originX, ping.originY),
+                    style = Stroke(width = 1.5f)
+                )
+                drawCircle(
+                    color = NanoCyan.copy(alpha = pingAlpha * 0.08f),
+                    radius = ping.currentRadius,
+                    center = Offset(ping.originX, ping.originY)
+                )
+            }
+
             // 2. Render Stealth Noise Circle
             if (player.stealthNoiseRadius > 0) {
                 drawCircle(
@@ -118,146 +137,292 @@ fun VoxelCanvas(
                 )
             }
 
-            // 3. Render Enemies & Vision Cones
+            // 2b. Render Companion Squad Members (Drones & Scouts)
+            for (member in gameState.squadMembers) {
+                if (!member.isAlive || !member.isActive) continue
+
+                // Squad Vision Cone or Omnidirectional Scanner Field
+                if (member.isOmnidirectionalVision) {
+                    drawCircle(
+                        color = NanoCyan.copy(alpha = 0.08f),
+                        radius = member.visionRange,
+                        center = Offset(member.x, member.y)
+                    )
+                    drawCircle(
+                        color = NanoCyan.copy(alpha = 0.25f),
+                        radius = member.visionRange,
+                        center = Offset(member.x, member.y),
+                        style = Stroke(width = 1f)
+                    )
+                } else {
+                    drawVisionCone(
+                        origin = Offset(member.x, member.y),
+                        facingAngle = member.facingAngle,
+                        range = member.visionRange,
+                        fovAngleRad = member.fovAngleRad,
+                        color = NaniteGreen.copy(alpha = 0.16f)
+                    )
+                }
+
+                if (member.role == SquadRole.RECON_DRONE) {
+                    // AEGIS-1 Recon Drone Visuals
+                    val dronePulse = (sin((System.currentTimeMillis() % 1000) / 1000f * Math.PI * 2f).toFloat() * 0.5f + 0.5f)
+                    drawCircle(
+                        color = NanoCyan.copy(alpha = 0.5f + dronePulse * 0.5f),
+                        radius = 17f,
+                        center = Offset(member.x, member.y),
+                        style = Stroke(width = 2f)
+                    )
+                    val rotAngle = member.facingAngle
+                    for (nodeIdx in 0 until 4) {
+                        val nodeA = rotAngle + nodeIdx * (Math.PI.toFloat() / 2f)
+                        val nx = member.x + cos(nodeA) * 17f
+                        val ny = member.y + sin(nodeA) * 17f
+                        drawCircle(color = NanoCyan, radius = 3.5f, center = Offset(nx, ny))
+                    }
+                    drawCircle(
+                        color = VoidDark,
+                        radius = 12f,
+                        center = Offset(member.x, member.y)
+                    )
+                    drawCircle(
+                        color = NanoCyan,
+                        radius = 6f,
+                        center = Offset(member.x, member.y)
+                    )
+                    // Scanner Pointer Beam
+                    drawLine(
+                        color = NanoCyan,
+                        start = Offset(member.x, member.y),
+                        end = Offset(member.x + cos(member.facingAngle) * 26f, member.y + sin(member.facingAngle) * 26f),
+                        strokeWidth = 2.5f
+                    )
+                } else {
+                    // Vanguard Scout Echo Ground Unit
+                    drawCircle(
+                        color = NaniteGreen,
+                        radius = 15f,
+                        center = Offset(member.x, member.y)
+                    )
+                    drawCircle(
+                        color = VoidDark,
+                        radius = 9f,
+                        center = Offset(member.x, member.y)
+                    )
+                    drawCircle(
+                        color = Color.White,
+                        radius = 4f,
+                        center = Offset(member.x, member.y)
+                    )
+                    drawLine(
+                        color = NaniteGreen,
+                        start = Offset(member.x, member.y),
+                        end = Offset(member.x + cos(member.facingAngle) * 22f, member.y + sin(member.facingAngle) * 22f),
+                        strokeWidth = 3.5f
+                    )
+                }
+
+                // Squad Member Callsign Badge
+                val callsignColor = if (member.role == SquadRole.RECON_DRONE) NanoCyan else NaniteGreen
+                drawSafeText(
+                    textMeasurer = textMeasurer,
+                    text = "[${member.callsign}]",
+                    style = TextStyle(color = callsignColor, fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                    topLeft = Offset(member.x - 30f, member.y - 28f)
+                )
+            }
+
+            // 3. Render Enemies & Fog-of-War Visibility Filtering
             for (enemy in gameState.enemies) {
                 if (!enemy.isAlive) continue
 
-                // Draw AI Vision Cone Fan
-                val coneColor = when (enemy.state) {
-                    AIState.PATROL -> NaniteGreen.copy(alpha = 0.18f)
-                    AIState.SUSPICIOUS, AIState.INVESTIGATING -> HazardYellow.copy(alpha = 0.28f)
-                    else -> LaserRed.copy(alpha = 0.35f)
-                }
+                val isFullyVisible = !gameState.isFogOfWarEnabled || enemy.isVisibleInFog
+                val isSonarPinged = !isFullyVisible && enemy.radarPingAlpha > 0.04f
+                val isTremorDetected = !isFullyVisible && !isSonarPinged && enemy.audioTremorDetected
 
-                drawVisionCone(
-                    origin = Offset(enemy.x, enemy.y),
-                    facingAngle = enemy.facingAngle,
-                    range = enemy.visionRange,
-                    fovAngleRad = enemy.visionAngleRad,
-                    color = coneColor
-                )
+                if (isFullyVisible) {
+                    // Draw AI Vision Cone Fan
+                    val coneColor = when (enemy.state) {
+                        AIState.PATROL -> NaniteGreen.copy(alpha = 0.18f)
+                        AIState.SUSPICIOUS, AIState.INVESTIGATING -> HazardYellow.copy(alpha = 0.28f)
+                        else -> LaserRed.copy(alpha = 0.35f)
+                    }
 
-                // Draw Enemy Entity
-                val enemyColor = when (enemy.type) {
-                    EnemyType.GRUNT -> LaserRed
-                    EnemyType.FLANKER -> PlasmaPink
-                    EnemyType.SHIELD_ENFORCER -> ShieldBlue
-                    EnemyType.SNIPER_STALKER -> HazardYellow
-                    EnemyType.BOUNTY_BOSS -> NanoPurple
-                }
-
-                drawCircle(
-                    color = enemyColor,
-                    radius = 16f,
-                    center = Offset(enemy.x, enemy.y)
-                )
-
-                // Enemy Cover Snap Field
-                if (enemy.isCoverSnapped) {
-                    val nx = enemy.coverSnapNormalX
-                    val ny = enemy.coverSnapNormalY
-                    val tangentX = -ny
-                    val tangentY = nx
-
-                    val contactStartX = enemy.x - nx * 4f + tangentX * 16f
-                    val contactStartY = enemy.y - ny * 4f + tangentY * 16f
-                    val contactEndX = enemy.x - nx * 4f - tangentX * 16f
-                    val contactEndY = enemy.y - ny * 4f - tangentY * 16f
-
-                    drawLine(
-                        color = ShieldBlue,
-                        start = Offset(contactStartX, contactStartY),
-                        end = Offset(contactEndX, contactEndY),
-                        strokeWidth = 3.5f
+                    drawVisionCone(
+                        origin = Offset(enemy.x, enemy.y),
+                        facingAngle = enemy.facingAngle,
+                        range = enemy.visionRange,
+                        fovAngleRad = enemy.visionAngleRad,
+                        color = coneColor
                     )
+
+                    // Draw Enemy Entity
+                    val enemyColor = when (enemy.type) {
+                        EnemyType.GRUNT -> LaserRed
+                        EnemyType.FLANKER -> PlasmaPink
+                        EnemyType.SHIELD_ENFORCER -> ShieldBlue
+                        EnemyType.SNIPER_STALKER -> HazardYellow
+                        EnemyType.BOUNTY_BOSS -> NanoPurple
+                    }
 
                     drawCircle(
-                        color = ShieldBlue,
-                        radius = 19f,
-                        center = Offset(enemy.x, enemy.y),
-                        style = Stroke(width = 1.8f)
+                        color = enemyColor,
+                        radius = 16f,
+                        center = Offset(enemy.x, enemy.y)
                     )
-                }
 
-                // Facing Direction Pointer
-                drawLine(
-                    color = Color.White,
-                    start = Offset(enemy.x, enemy.y),
-                    end = Offset(enemy.x + cos(enemy.facingAngle) * 24f, enemy.y + sin(enemy.facingAngle) * 24f),
-                    strokeWidth = 3f
-                )
+                    // Enemy Cover Snap Field
+                    if (enemy.isCoverSnapped) {
+                        val nx = enemy.coverSnapNormalX
+                        val ny = enemy.coverSnapNormalY
+                        val tangentX = -ny
+                        val tangentY = nx
 
-                // Shield Enforcer Arc
-                if (enemy.shieldHp > 0) {
-                    drawArc(
-                        color = ShieldBlue,
-                        startAngle = Math.toDegrees((enemy.facingAngle - 0.7f).toDouble()).toFloat(),
-                        sweepAngle = 80f,
-                        useCenter = false,
-                        topLeft = Offset(enemy.x - 22f, enemy.y - 22f),
-                        size = Size(44f, 44f),
-                        style = Stroke(width = 5f)
-                    )
-                }
+                        val contactStartX = enemy.x - nx * 4f + tangentX * 16f
+                        val contactStartY = enemy.y - ny * 4f + tangentY * 16f
+                        val contactEndX = enemy.x - nx * 4f - tangentX * 16f
+                        val contactEndY = enemy.y - ny * 4f - tangentY * 16f
 
-                // Health Bar
-                val hpPct = (enemy.health / enemy.maxHealth).coerceIn(0f, 1f)
-                drawRect(
-                    color = Color.Black,
-                    topLeft = Offset(enemy.x - 18f, enemy.y - 26f),
-                    size = Size(36f, 5f)
-                )
-                drawRect(
-                    color = if (hpPct > 0.5f) NaniteGreen else LaserRed,
-                    topLeft = Offset(enemy.x - 18f, enemy.y - 26f),
-                    size = Size(36f * hpPct, 5f)
-                )
-
-                // AI State Tag & Alert
-                if (enemy.state != AIState.PATROL) {
-                    val stateTag = when (enemy.state) {
-                        AIState.FLANKING -> "FLANK"
-                        AIState.SEEKING_COVER -> "COVER"
-                        AIState.ENGAGED -> "ENGAGE"
-                        AIState.SUPPRESSING -> "SUPPRESS"
-                        AIState.RETREAT -> "RETREAT"
-                        AIState.SUSPICIOUS, AIState.INVESTIGATING -> "ALERT"
-                        else -> "!"
-                    }
-                    val alertColor = when (enemy.state) {
-                        AIState.FLANKING -> PlasmaPink
-                        AIState.SEEKING_COVER -> ShieldBlue
-                        AIState.ENGAGED -> LaserRed
-                        AIState.SUPPRESSING -> HazardYellow
-                        AIState.RETREAT -> HazardYellow
-                        else -> HazardYellow
-                    }
-                    drawText(
-                        textMeasurer = textMeasurer,
-                        text = "[$stateTag]",
-                        style = TextStyle(color = alertColor, fontSize = 11.sp, fontWeight = FontWeight.Bold),
-                        topLeft = Offset(enemy.x - 22f, enemy.y - 42f)
-                    )
-                }
-
-                // Render active tactical navigation path waypoints if tactical overlay enabled or flanking
-                if (gameState.isTacticalGridOverlayEnabled && enemy.activePath.isNotEmpty()) {
-                    var prevPt = Offset(enemy.x, enemy.y)
-                    for (idx in enemy.activePathIndex until enemy.activePath.size) {
-                        val pt = Offset(enemy.activePath[idx].first, enemy.activePath[idx].second)
                         drawLine(
-                            color = PlasmaPink.copy(alpha = 0.55f),
-                            start = prevPt,
-                            end = pt,
-                            strokeWidth = 2f
+                            color = ShieldBlue,
+                            start = Offset(contactStartX, contactStartY),
+                            end = Offset(contactEndX, contactEndY),
+                            strokeWidth = 3.5f
                         )
+
                         drawCircle(
-                            color = PlasmaPink.copy(alpha = 0.7f),
-                            radius = 3f,
-                            center = pt
+                            color = ShieldBlue,
+                            radius = 19f,
+                            center = Offset(enemy.x, enemy.y),
+                            style = Stroke(width = 1.8f)
                         )
-                        prevPt = pt
                     }
+
+                    // Facing Direction Pointer
+                    drawLine(
+                        color = Color.White,
+                        start = Offset(enemy.x, enemy.y),
+                        end = Offset(enemy.x + cos(enemy.facingAngle) * 24f, enemy.y + sin(enemy.facingAngle) * 24f),
+                        strokeWidth = 3f
+                    )
+
+                    // Shield Enforcer Arc
+                    if (enemy.shieldHp > 0) {
+                        drawArc(
+                            color = ShieldBlue,
+                            startAngle = Math.toDegrees((enemy.facingAngle - 0.7f).toDouble()).toFloat(),
+                            sweepAngle = 80f,
+                            useCenter = false,
+                            topLeft = Offset(enemy.x - 22f, enemy.y - 22f),
+                            size = Size(44f, 44f),
+                            style = Stroke(width = 5f)
+                        )
+                    }
+
+                    // Health Bar
+                    val hpPct = (enemy.health / enemy.maxHealth).coerceIn(0f, 1f)
+                    drawRect(
+                        color = Color.Black,
+                        topLeft = Offset(enemy.x - 18f, enemy.y - 26f),
+                        size = Size(36f, 5f)
+                    )
+                    drawRect(
+                        color = if (hpPct > 0.5f) NaniteGreen else LaserRed,
+                        topLeft = Offset(enemy.x - 18f, enemy.y - 26f),
+                        size = Size(36f * hpPct, 5f)
+                    )
+
+                    // AI State Tag & Alert
+                    if (enemy.state != AIState.PATROL) {
+                        val stateTag = when (enemy.state) {
+                            AIState.FLANKING -> "FLANK"
+                            AIState.SEEKING_COVER -> "COVER"
+                            AIState.ENGAGED -> "ENGAGE"
+                            AIState.SUPPRESSING -> "SUPPRESS"
+                            AIState.RETREAT -> "RETREAT"
+                            AIState.SUSPICIOUS, AIState.INVESTIGATING -> "ALERT"
+                            else -> "!"
+                        }
+                        val alertColor = when (enemy.state) {
+                            AIState.FLANKING -> PlasmaPink
+                            AIState.SEEKING_COVER -> ShieldBlue
+                            AIState.ENGAGED -> LaserRed
+                            AIState.SUPPRESSING -> HazardYellow
+                            AIState.RETREAT -> HazardYellow
+                            else -> HazardYellow
+                        }
+                        drawSafeText(
+                            textMeasurer = textMeasurer,
+                            text = "[$stateTag]",
+                            style = TextStyle(color = alertColor, fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                            topLeft = Offset(enemy.x - 22f, enemy.y - 42f)
+                        )
+                    }
+
+                    // Render active tactical navigation path waypoints if tactical overlay enabled or flanking
+                    if (gameState.isTacticalGridOverlayEnabled && enemy.activePath.isNotEmpty()) {
+                        var prevPt = Offset(enemy.x, enemy.y)
+                        for (idx in enemy.activePathIndex until enemy.activePath.size) {
+                            val pt = Offset(enemy.activePath[idx].first, enemy.activePath[idx].second)
+                            drawLine(
+                                color = PlasmaPink.copy(alpha = 0.55f),
+                                start = prevPt,
+                                end = pt,
+                                strokeWidth = 2f
+                            )
+                            drawCircle(
+                                color = PlasmaPink.copy(alpha = 0.7f),
+                                radius = 3f,
+                                center = pt
+                            )
+                            prevPt = pt
+                        }
+                    }
+                } else if (isSonarPinged) {
+                    // Sonar Echolocation Ghost in Fog-of-War
+                    val pingAlpha = enemy.radarPingAlpha.coerceIn(0f, 1f)
+                    drawCircle(
+                        color = LaserRed.copy(alpha = pingAlpha * 0.4f),
+                        radius = 20f,
+                        center = Offset(enemy.x, enemy.y)
+                    )
+                    drawCircle(
+                        color = LaserRed.copy(alpha = pingAlpha),
+                        radius = 22f,
+                        center = Offset(enemy.x, enemy.y),
+                        style = Stroke(width = 2f)
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = pingAlpha),
+                        radius = 4f,
+                        center = Offset(enemy.x, enemy.y)
+                    )
+                    drawSafeText(
+                        textMeasurer = textMeasurer,
+                        text = "[SONAR PING]",
+                        style = TextStyle(color = LaserRed.copy(alpha = pingAlpha), fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                        topLeft = Offset(enemy.x - 32f, enemy.y - 34f)
+                    )
+                } else if (isTremorDetected) {
+                    // Acoustic Tremor Wave Ripple in Fog-of-War
+                    val tremorAlpha = 0.6f
+                    drawCircle(
+                        color = HazardYellow.copy(alpha = tremorAlpha * 0.2f),
+                        radius = 16f,
+                        center = Offset(enemy.x, enemy.y)
+                    )
+                    drawCircle(
+                        color = HazardYellow.copy(alpha = tremorAlpha),
+                        radius = 18f,
+                        center = Offset(enemy.x, enemy.y),
+                        style = Stroke(width = 1.5f)
+                    )
+                    drawSafeText(
+                        textMeasurer = textMeasurer,
+                        text = "[TREMOR]",
+                        style = TextStyle(color = HazardYellow.copy(alpha = tremorAlpha), fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                        topLeft = Offset(enemy.x - 22f, enemy.y - 30f)
+                    )
                 }
             }
 
@@ -331,6 +496,50 @@ fun VoxelCanvas(
                             strokeWidth = 2.5f
                         )
                     }
+                    ParticleType.ELECTRIC_BOLT -> {
+                        // Jagged electric discharge bolt
+                        val midX = (p.x + (p.x - p.vx * 0.04f)) / 2f + (Random.nextFloat() - 0.5f) * 12f
+                        val midY = (p.y + (p.y - p.vy * 0.04f)) / 2f + (Random.nextFloat() - 0.5f) * 12f
+                        val sparkPath = Path()
+                        sparkPath.moveTo(p.x, p.y)
+                        sparkPath.lineTo(midX, midY)
+                        sparkPath.lineTo(p.x - p.vx * 0.04f, p.y - p.vy * 0.04f)
+                        drawPath(sparkPath, p.color.copy(alpha = p.life), style = Stroke(width = 2.5f))
+                    }
+                    ParticleType.NANITE_SPORE -> {
+                        // Glowing biohazard toxic spore
+                        drawCircle(
+                            color = p.color.copy(alpha = p.life * 0.45f),
+                            radius = p.size,
+                            center = Offset(p.x, p.y)
+                        )
+                        drawCircle(
+                            color = Color(0xFF34D399).copy(alpha = p.life * 0.8f),
+                            radius = p.size * 0.4f,
+                            center = Offset(p.x, p.y)
+                        )
+                    }
+                    ParticleType.CRYO_CRYSTAL -> {
+                        // Crystalline ice shard
+                        val halfS = p.size * 0.6f * p.life
+                        val icePath = Path()
+                        icePath.moveTo(p.x, p.y - halfS)
+                        icePath.lineTo(p.x + halfS, p.y)
+                        icePath.lineTo(p.x, p.y + halfS)
+                        icePath.lineTo(p.x - halfS, p.y)
+                        icePath.close()
+                        drawPath(icePath, p.color.copy(alpha = p.life * 0.7f))
+                        drawPath(icePath, Color.White.copy(alpha = p.life), style = Stroke(width = 1f))
+                    }
+                    ParticleType.PLASMA_WAVE -> {
+                        // Expanding shock ring
+                        drawCircle(
+                            color = p.color.copy(alpha = p.life * 0.8f),
+                            radius = p.size * (1f - p.life + 0.2f),
+                            center = Offset(p.x, p.y),
+                            style = Stroke(width = 3f)
+                        )
+                    }
                     ParticleType.SMOKE_NANO -> {
                         // Soft expanding particulate dust cloud
                         drawCircle(
@@ -346,6 +555,124 @@ fun VoxelCanvas(
                             center = Offset(p.x, p.y)
                         )
                     }
+                }
+            }
+
+            // 6b. Render Active Environmental Hazards (Gas Clouds, Cryo Fields, Electric Arcs, Shockwaves)
+            for (cloud in gameState.activeGasClouds) {
+                // Expanding Corrosive Nanite Gas Aura
+                val pulse = (sin(cloud.pulseAnim.toDouble()) * 0.15 + 0.85).toFloat()
+                val alphaBase = (cloud.remainingSec / 10f).coerceIn(0.2f, 0.65f)
+                drawCircle(
+                    color = Color(0xFF10B981).copy(alpha = alphaBase * 0.3f * pulse),
+                    radius = cloud.currentRadius * pulse,
+                    center = Offset(cloud.x, cloud.y)
+                )
+                drawCircle(
+                    color = Color(0xFF047857).copy(alpha = alphaBase * 0.5f),
+                    radius = cloud.currentRadius * 0.65f,
+                    center = Offset(cloud.x, cloud.y)
+                )
+                drawCircle(
+                    color = Color(0xFF34D399).copy(alpha = alphaBase * 0.8f),
+                    radius = cloud.currentRadius * pulse,
+                    center = Offset(cloud.x, cloud.y),
+                    style = Stroke(width = 2f)
+                )
+                drawSafeText(
+                    textMeasurer = textMeasurer,
+                    text = "☣ NANITE GAS",
+                    style = TextStyle(color = Color(0xFF34D399).copy(alpha = alphaBase), fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                    topLeft = Offset(cloud.x - 36f, cloud.y - 12f)
+                )
+            }
+
+            for (cryo in gameState.activeCryoFields) {
+                // Subzero Cryo Frost Zone
+                drawCircle(
+                    color = Color(0xFF0284C7).copy(alpha = 0.25f),
+                    radius = cryo.radius,
+                    center = Offset(cryo.x, cryo.y)
+                )
+                drawCircle(
+                    color = Color(0xFF38BDF8).copy(alpha = 0.6f),
+                    radius = cryo.radius,
+                    center = Offset(cryo.x, cryo.y),
+                    style = Stroke(width = 2.5f)
+                )
+                drawSafeText(
+                    textMeasurer = textMeasurer,
+                    text = "❄ CRYO ZONE",
+                    style = TextStyle(color = Color(0xFF38BDF8), fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                    topLeft = Offset(cryo.x - 34f, cryo.y - 10f)
+                )
+            }
+
+            for (arc in gameState.activeElectricArcs) {
+                // High-Voltage Lightning Arc
+                val segs = 5
+                val arcPath = Path()
+                arcPath.moveTo(arc.startX, arc.startY)
+                for (s in 1 until segs) {
+                    val frac = s.toFloat() / segs
+                    val lx = arc.startX + (arc.endX - arc.startX) * frac + (Random.nextFloat() - 0.5f) * 22f
+                    val ly = arc.startY + (arc.endY - arc.startY) * frac + (Random.nextFloat() - 0.5f) * 22f
+                    arcPath.lineTo(lx, ly)
+                }
+                arcPath.lineTo(arc.endX, arc.endY)
+                val arcAlpha = (arc.lifeSec / arc.maxLifeSec).coerceIn(0f, 1f)
+                drawPath(arcPath, Color(0xFF00F0FF).copy(alpha = arcAlpha), style = Stroke(width = 3.5f))
+                drawPath(arcPath, Color.White.copy(alpha = arcAlpha), style = Stroke(width = 1.5f))
+            }
+
+            for (sw in gameState.activeShockwaves) {
+                // Detonation Blast Ring
+                val swAlpha = (sw.lifeSec / sw.maxLifeSec).coerceIn(0f, 1f)
+                drawCircle(
+                    color = sw.color.copy(alpha = swAlpha * 0.35f),
+                    radius = sw.currentRadius,
+                    center = Offset(sw.x, sw.y)
+                )
+                drawCircle(
+                    color = sw.color.copy(alpha = swAlpha),
+                    radius = sw.currentRadius,
+                    center = Offset(sw.x, sw.y),
+                    style = Stroke(width = 4f)
+                )
+            }
+
+            // Render HUD Interaction Reticles for nearby Hazards
+            for (h in gameState.activeHazards) {
+                val dist = hypot(h.worldX - player.x, h.worldY - player.y)
+                if (dist <= 160f && h.status == com.example.engine.HazardStatus.DORMANT) {
+                    val pAlpha = (sin(h.pulsePhase.toDouble()) * 0.3 + 0.7).toFloat()
+                    val col = Color(h.type.baseColorHex)
+                    drawCircle(
+                        color = col.copy(alpha = pAlpha * 0.7f),
+                        radius = 28f,
+                        center = Offset(h.worldX, h.worldY),
+                        style = Stroke(width = 2f)
+                    )
+                    drawSafeText(
+                        textMeasurer = textMeasurer,
+                        text = h.type.iconTag,
+                        style = TextStyle(color = col, fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                        topLeft = Offset(h.worldX - 22f, h.worldY - 34f)
+                    )
+                } else if (h.status == com.example.engine.HazardStatus.CHARGING) {
+                    // Critical Reactor Countdown warning
+                    drawCircle(
+                        color = Color(0xFFFF5500),
+                        radius = 35f,
+                        center = Offset(h.worldX, h.worldY),
+                        style = Stroke(width = 3f)
+                    )
+                    drawSafeText(
+                        textMeasurer = textMeasurer,
+                        text = "OVERLOAD: ${"%.1f".format(h.chargeCountdownSec)}s",
+                        style = TextStyle(color = Color(0xFFFF5500), fontSize = 10.sp, fontWeight = FontWeight.Black),
+                        topLeft = Offset(h.worldX - 38f, h.worldY - 38f)
+                    )
                 }
             }
 
@@ -555,18 +882,20 @@ private fun DrawScope.drawTerrainGrid(
     cameraY: Float,
     canvasWidth: Float,
     canvasHeight: Float,
-    playerX: Float,
-    playerY: Float,
-    isTacticalOverlayEnabled: Boolean,
-    textMeasurer: androidx.compose.ui.text.TextMeasurer,
-    dynamicLights: List<DynamicLight> = emptyList()
+    gameState: GameState,
+    textMeasurer: androidx.compose.ui.text.TextMeasurer
 ) {
     val startGx = (cameraX / terrain.tileSize).toInt().coerceIn(0, terrain.width - 1)
     val endGx = ((cameraX + canvasWidth) / terrain.tileSize).toInt().coerceAtMost(terrain.width - 1)
     val startGy = (cameraY / terrain.tileSize).toInt().coerceIn(0, terrain.height - 1)
     val endGy = ((cameraY + canvasHeight) / terrain.tileSize).toInt().coerceAtMost(terrain.height - 1)
 
-    val playerSightRange = 520f
+    val player = gameState.player
+    val playerX = player.x
+    val playerY = player.y
+    val isTacticalOverlayEnabled = gameState.isTacticalGridOverlayEnabled
+    val dynamicLights = gameState.dynamicLights
+    val isFogActive = gameState.isFogOfWarEnabled
 
     for (gx in startGx..endGx) {
         for (gy in startGy..endGy) {
@@ -576,14 +905,11 @@ private fun DrawScope.drawTerrainGrid(
             val tileCenterX = worldX + terrain.tileSize / 2f
             val tileCenterY = worldY + terrain.tileSize / 2f
 
-            val dxP = tileCenterX - playerX
-            val dyP = tileCenterY - playerY
-            val distToPlayer = kotlin.math.sqrt(dxP * dxP + dyP * dyP)
+            val isVisibleInSight = if (isFogActive) {
+                isTileVisibleToSquadOrPlayer(tileCenterX, tileCenterY, player, gameState.squadMembers, terrain)
+            } else true
 
-            val inLoSRange = distToPlayer <= playerSightRange
-            val hasLoS = if (inLoSRange) {
-                hasLineOfSight(playerX, playerY, tileCenterX, tileCenterY, terrain)
-            } else false
+            val hasLoS = isVisibleInSight
 
             // Real-time Dynamic Lighting Accumulation for current Voxel Tile
             var addR = 0f
@@ -682,8 +1008,8 @@ private fun DrawScope.drawTerrainGrid(
                     drawLine(tickColor, Offset(worldX + terrain.tileSize, worldY + terrain.tileSize), Offset(worldX + terrain.tileSize - tickLen, worldY + terrain.tileSize), strokeWidth = 1.5f)
                     drawLine(tickColor, Offset(worldX + terrain.tileSize, worldY + terrain.tileSize), Offset(worldX + terrain.tileSize, worldY + terrain.tileSize - tickLen), strokeWidth = 1.5f)
 
-                } else if (!inLoSRange) {
-                    // Unseen Fog overlay
+                } else {
+                    // Shrouded or Unseen Fog overlay
                     drawRect(
                         color = Color.Black.copy(alpha = 0.35f),
                         topLeft = Offset(worldX, worldY),
@@ -694,13 +1020,6 @@ private fun DrawScope.drawTerrainGrid(
                         topLeft = Offset(worldX, worldY),
                         size = Size(terrain.tileSize, terrain.tileSize),
                         style = Stroke(width = 1f)
-                    )
-                } else {
-                    // Blocked sight shadow
-                    drawRect(
-                        color = Color.Black.copy(alpha = 0.5f),
-                        topLeft = Offset(worldX, worldY),
-                        size = Size(terrain.tileSize, terrain.tileSize)
                     )
                 }
             } else {
@@ -903,8 +1222,84 @@ private fun DrawScope.drawTerrainGrid(
                     }
                 }
             }
+
+            // Fog of War Top-Down Alien Obscuration Shroud
+            if (isFogActive && !isVisibleInSight) {
+                val dx = tileCenterX - playerX
+                val dy = tileCenterY - playerY
+                val distFromPlayer = sqrt(dx * dx + dy * dy)
+
+                // Explored tactical memory vs dense alien pitch black void
+                val shroudAlpha = if (distFromPlayer < 650f) 0.65f else 0.94f
+                drawRect(
+                    color = VoidDark.copy(alpha = shroudAlpha),
+                    topLeft = Offset(worldX, worldY),
+                    size = Size(terrain.tileSize, terrain.tileSize)
+                )
+                if (shroudAlpha > 0.8f) {
+                    val mistRand = ((gx * 31 + gy * 17) % 7)
+                    if (mistRand == 0) {
+                        drawCircle(
+                            color = NanoPurple.copy(alpha = 0.35f),
+                            radius = 4f,
+                            center = Offset(tileCenterX, tileCenterY)
+                        )
+                    }
+                }
+            }
         }
     }
+}
+
+// Raycasting function for squad and player visibility check
+private fun isTileVisibleToSquadOrPlayer(
+    tileCenterX: Float,
+    tileCenterY: Float,
+    player: PlayerState,
+    squad: List<SquadMember>,
+    terrain: VoxelTerrain
+): Boolean {
+    // 1. Check Player Line-of-sight
+    if (player.isAlive) {
+        val dxP = tileCenterX - player.x
+        val dyP = tileCenterY - player.y
+        val distToPlayerSq = dxP * dxP + dyP * dyP
+        val playerSightRange = 560f
+        if (distToPlayerSq <= playerSightRange * playerSightRange) {
+            if (distToPlayerSq <= 180f * 180f) {
+                if (hasLineOfSight(player.x, player.y, tileCenterX, tileCenterY, terrain)) return true
+            } else {
+                val angleToTile = atan2(dyP, dxP)
+                var angleDiff = abs(angleToTile - player.facingAngle)
+                if (angleDiff > Math.PI) angleDiff = (2 * Math.PI - angleDiff).toFloat()
+                if (angleDiff <= Math.toRadians(80.0).toFloat()) {
+                    if (hasLineOfSight(player.x, player.y, tileCenterX, tileCenterY, terrain)) return true
+                }
+            }
+        }
+    }
+
+    // 2. Check Squad Members Line-of-sight
+    for (member in squad) {
+        if (!member.isAlive || !member.isActive) continue
+        val dx = tileCenterX - member.x
+        val dy = tileCenterY - member.y
+        val distSq = dx * dx + dy * dy
+        if (distSq <= member.visionRange * member.visionRange) {
+            if (member.isOmnidirectionalVision) {
+                if (hasLineOfSight(member.x, member.y, tileCenterX, tileCenterY, terrain)) return true
+            } else {
+                val angleToTile = atan2(dy, dx)
+                var angleDiff = abs(angleToTile - member.facingAngle)
+                if (angleDiff > Math.PI) angleDiff = (2 * Math.PI - angleDiff).toFloat()
+                if (angleDiff <= member.fovAngleRad / 2f) {
+                    if (hasLineOfSight(member.x, member.y, tileCenterX, tileCenterY, terrain)) return true
+                }
+            }
+        }
+    }
+
+    return false
 }
 
 // Raycasting function for tactical line of sight

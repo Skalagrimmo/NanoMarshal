@@ -569,6 +569,9 @@ class EnemyAI(
             if (!e.isCoverSnapped) {
                 e.isCoverSnapped = true
                 e.isBehindCover = true
+                e.targetCoverX = foundCoverTile.gridX
+                e.targetCoverY = foundCoverTile.gridY
+                e.activeCoverType = foundCoverTile.type
                 e.coverSnapNormalX = snapNormalX
                 e.coverSnapNormalY = snapNormalY
 

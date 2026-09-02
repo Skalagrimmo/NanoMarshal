@@ -81,7 +81,10 @@ fun GameScreen(
             },
             onPauseToggle = { isPaused = !isPaused },
             onToggleTacticalOverlay = { engine.toggleTacticalOverlay() },
-            onToggleAutoAim = { engine.toggleAutoAimMode() }
+            onToggleAutoAim = { engine.toggleAutoAimMode() },
+            onToggleFogOfWar = { engine.toggleFogOfWar() },
+            onTriggerSonarScan = { engine.triggerReconSonarScan() },
+            onTriggerHazardInteraction = { engine.triggerHazardInteraction() }
         )
 
         // 3. Pause Dialog Overlay
@@ -127,6 +130,7 @@ fun GameScreen(
             }
         }
 
+        if (gameState.isVictory) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()

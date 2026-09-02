@@ -12,7 +12,11 @@ enum class VoxelType {
     DESTRUCTIBLE_PILLAR,
     REINFORCED_METAL,
     CONCRETE_WALL,
-    ALIEN_BIOMASS
+    ALIEN_BIOMASS,
+    NANITE_GAS_VENT,
+    ELECTRIC_CONDUIT,
+    CRYO_PIPE,
+    PLASMA_GENERATOR
 }
 
 enum class CoverHeight {
@@ -41,5 +45,5 @@ data class VoxelTile(
     var hitFlashTimer: Float = 0f
 ) {
     val isWalkable: Boolean get() = (coverHeight == CoverHeight.NONE && type != VoxelType.ACID_POOL) || isDisintegrated
-    val isHazard: Boolean get() = type == VoxelType.ACID_POOL && !isDisintegrated
+    val isHazard: Boolean get() = (type == VoxelType.ACID_POOL || type == VoxelType.NANITE_GAS_VENT || type == VoxelType.ELECTRIC_CONDUIT || type == VoxelType.CRYO_PIPE || type == VoxelType.PLASMA_GENERATOR) && !isDisintegrated
 }

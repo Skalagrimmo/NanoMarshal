@@ -39,6 +39,9 @@ fun TacticalHUD(
     onPauseToggle: () -> Unit,
     onToggleTacticalOverlay: () -> Unit = {},
     onToggleAutoAim: () -> Unit = {},
+    onToggleFogOfWar: () -> Unit = {},
+    onTriggerSonarScan: () -> Unit = {},
+    onTriggerHazardInteraction: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val player = gameState.player
@@ -91,8 +94,39 @@ fun TacticalHUD(
                 // System DAG/LOD Status & Tactical Overlay Toggle
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    // Fog of War Toggle Pill
+                    Surface(
+                        onClick = onToggleFogOfWar,
+                        modifier = Modifier.testTag("fog_of_war_toggle"),
+                        shape = RoundedCornerShape(16.dp),
+                        color = VoidDark.copy(alpha = 0.85f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (gameState.isFogOfWarEnabled) NanoCyan else SlateBorder
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (gameState.isFogOfWarEnabled) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                contentDescription = "Fog of War",
+                                tint = if (gameState.isFogOfWarEnabled) NanoCyan else TextMuted,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (gameState.isFogOfWarEnabled) "FOG: ON" else "FOG: OFF",
+                                color = if (gameState.isFogOfWarEnabled) NanoCyan else TextMuted,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
                     // Auto-Aim Mode Toggle Pill
                     Surface(
                         onClick = onToggleAutoAim,
@@ -105,20 +139,20 @@ fun TacticalHUD(
                         )
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
                                 imageVector = Icons.Default.TrackChanges,
                                 contentDescription = "Auto-Aim",
                                 tint = if (player.isAutoAimEnabled) PlasmaPink else TextMuted,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(13.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = "AIM: ${player.autoAimMode.name}",
                                 color = if (player.isAutoAimEnabled) PlasmaPink else TextMuted,
-                                fontSize = 10.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -136,20 +170,20 @@ fun TacticalHUD(
                         )
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Grid4x4,
                                 contentDescription = "Grid",
                                 tint = if (gameState.isTacticalGridOverlayEnabled) NanoCyan else TextMuted,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(13.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = if (gameState.isTacticalGridOverlayEnabled) "GRID: ON" else "GRID: OFF",
+                                text = if (gameState.isTacticalGridOverlayEnabled) "GRID" else "GRID",
                                 color = if (gameState.isTacticalGridOverlayEnabled) NanoCyan else TextMuted,
-                                fontSize = 10.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -160,7 +194,7 @@ fun TacticalHUD(
                         onClick = onPauseToggle,
                         modifier = Modifier
                             .testTag("pause_button")
-                            .size(36.dp)
+                            .size(34.dp)
                             .background(VoidDark.copy(alpha = 0.85f), CircleShape)
                             .border(1.dp, SlateBorder, CircleShape)
                     ) {
@@ -168,7 +202,7 @@ fun TacticalHUD(
                             imageVector = Icons.Default.Pause,
                             contentDescription = "Pause",
                             tint = TextPrimary,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                 }
@@ -427,6 +461,60 @@ fun TacticalHUD(
                 .fillMaxWidth()
                 .align(Alignment.BottomCenter)
         ) {
+            // Active Cover Defensive Buff Status Pill
+            AnimatedVisibility(
+                visible = player.isBehindCover || player.activeCoverBuffTitle != null,
+                modifier = Modifier.padding(bottom = 6.dp)
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (player.isCoverFlanked) LaserRed.copy(alpha = 0.25f) else NanoCyan.copy(alpha = 0.15f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (player.isCoverFlanked) LaserRed else NanoCyan
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (player.isCoverFlanked) Icons.Default.Warning else Icons.Default.Shield,
+                                contentDescription = "Cover Buff",
+                                tint = if (player.isCoverFlanked) LaserRed else NanoCyan,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column {
+                                Text(
+                                    text = player.activeCoverBuffTitle ?: "COVER BRACED",
+                                    color = if (player.isCoverFlanked) LaserRed else TextPrimary,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = player.activeCoverBuffSubtitle ?: "DEFENSIVE POSITION ACTIVE",
+                                    color = if (player.isCoverFlanked) LaserRed.copy(alpha = 0.8f) else NanoCyan,
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        val stanceLabel = player.stance.name
+                        Text(
+                            text = "STANCE: $stanceLabel",
+                            color = TextMuted,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
             // Vitality & Nano-Shell Status + Ammo Card Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -531,6 +619,70 @@ fun TacticalHUD(
                 }
             }
 
+            // Contextual Environmental Hazard Interaction Banner & Action Button
+            gameState.hazardInteractionPrompt?.let { prompt ->
+                Surface(
+                    onClick = onTriggerHazardInteraction,
+                    modifier = Modifier
+                        .testTag("hazard_interact_button")
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = VoidDark.copy(alpha = 0.94f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.5.dp,
+                        Color(prompt.type.baseColorHex)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = prompt.actionName,
+                                tint = Color(prompt.type.baseColorHex),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = prompt.title.uppercase(),
+                                    color = Color(prompt.type.baseColorHex),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black,
+                                    letterSpacing = 1.sp
+                                )
+                                Text(
+                                    text = "${prompt.actionName} (TAP TO ACTIVATE)",
+                                    color = TextSecondary,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(prompt.type.baseColorHex).copy(alpha = 0.25f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(prompt.type.baseColorHex))
+                        ) {
+                            Text(
+                                text = "TRIGGER",
+                                color = Color(prompt.type.baseColorHex),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Black,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(10.dp))
 
             // Joysticks & Action Buttons Row
@@ -554,14 +706,18 @@ fun TacticalHUD(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Cover / Stance Action Button
+                    val isCoverActive = player.isBehindCover || player.isCoverSnapped
                     Surface(
                         onClick = onToggleStance,
                         modifier = Modifier
                             .testTag("stance_button")
                             .size(52.dp),
                         shape = RoundedCornerShape(14.dp),
-                        color = SlateCard,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, NanoCyan.copy(alpha = 0.4f))
+                        color = if (isCoverActive) NanoCyan.copy(alpha = 0.2f) else SlateCard,
+                        border = androidx.compose.foundation.BorderStroke(
+                            if (isCoverActive) 1.5.dp else 1.dp,
+                            if (isCoverActive) NanoCyan else NanoCyan.copy(alpha = 0.4f)
+                        )
                     ) {
                         Column(
                             modifier = Modifier.fillMaxSize(),
@@ -569,12 +725,46 @@ fun TacticalHUD(
                             verticalArrangement = Arrangement.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Shield,
+                                imageVector = if (isCoverActive) Icons.Default.Shield else Icons.Default.Shield,
                                 contentDescription = "Cover",
+                                tint = if (isCoverActive) NanoCyan else TextSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = when (player.stance) {
+                                    PlayerStance.STAND -> "STAND"
+                                    PlayerStance.CROUCH -> "CROUCH"
+                                    PlayerStance.PRONE -> "PRONE"
+                                },
+                                color = if (isCoverActive) NanoCyan else TextMuted,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Sonar / Recon Scan Button
+                    Surface(
+                        onClick = onTriggerSonarScan,
+                        modifier = Modifier
+                            .testTag("sonar_scan_button")
+                            .size(52.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        color = SlateCard,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, NanoCyan)
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Sensors,
+                                contentDescription = "Sonar Scan",
                                 tint = NanoCyan,
                                 modifier = Modifier.size(20.dp)
                             )
-                            Text(text = "COVER", color = NanoCyan.copy(alpha = 0.8f), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                            Text(text = "SONAR", color = NanoCyan, fontSize = 8.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 

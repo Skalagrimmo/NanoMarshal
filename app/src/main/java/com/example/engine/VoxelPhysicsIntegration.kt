@@ -375,6 +375,29 @@ class VoxelPhysicsIntegration(
                     p.x += p.vx * deltaSec
                     p.vy += 20f * deltaSec // Light float upward drag
                 }
+
+                ParticleType.ELECTRIC_BOLT -> {
+                    p.vx *= (1.0f - 3.0f * deltaSec).coerceIn(0.0f, 1.0f)
+                    p.vy *= (1.0f - 3.0f * deltaSec).coerceIn(0.0f, 1.0f)
+                    p.x += p.vx * deltaSec
+                    p.y += p.vy * deltaSec
+                }
+
+                ParticleType.NANITE_SPORE -> {
+                    p.x += p.vx * deltaSec
+                    p.y += p.vy * deltaSec
+                    p.size += deltaSec * 4f
+                }
+
+                ParticleType.CRYO_CRYSTAL -> {
+                    p.x += p.vx * deltaSec
+                    p.y += p.vy * deltaSec
+                    p.vy += gravity * 0.3f * deltaSec
+                }
+
+                ParticleType.PLASMA_WAVE -> {
+                    p.size += deltaSec * 40f
+                }
             }
         }
     }
@@ -479,6 +502,10 @@ class VoxelPhysicsIntegration(
             VoxelType.EXPLOSIVE_BARREL -> Color(0xFFEF4444)
             VoxelType.ACID_POOL -> Color(0xFF22C55E)
             VoxelType.OBJECTIVE_NODE -> Color(0xFF3B82F6)
+            VoxelType.NANITE_GAS_VENT -> Color(0xFF10B981)
+            VoxelType.ELECTRIC_CONDUIT -> Color(0xFF00F0FF)
+            VoxelType.CRYO_PIPE -> Color(0xFF38BDF8)
+            VoxelType.PLASMA_GENERATOR -> Color(0xFFF59E0B)
             VoxelType.FLOOR_PLAZA -> Color(0xFFCBD5E1)
             VoxelType.FLOOR_DIRT -> Color(0xFF78350F)
         }

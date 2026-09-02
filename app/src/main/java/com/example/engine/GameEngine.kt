@@ -39,6 +39,7 @@ data class ThrowableItem(
 
 data class GameState(
     val player: PlayerState = PlayerState(),
+    val squadMembers: List<SquadMember> = emptyList(),
     val enemies: List<Enemy> = emptyList(),
     val bullets: List<Bullet> = emptyList(),
     val particles: List<Particle> = emptyList(),
@@ -51,6 +52,9 @@ data class GameState(
     val isVictory: Boolean = false,
     val isPaused: Boolean = false,
     val isTacticalGridOverlayEnabled: Boolean = true,
+    val isFogOfWarEnabled: Boolean = true,
+    val explorationPercentage: Float = 0f,
+    val activeRadarPings: List<RadarPingPulse> = emptyList(),
     val ricochetTrajectoryPoints: List<Pair<Float, Float>> = emptyList(),
     val screenShakeMs: Long = 0,
     val missionTimeMs: Long = 0,
@@ -62,23 +66,32 @@ data class GameState(
     val lod2Count: Int = 0,
     val dynamicLights: List<DynamicLight> = emptyList(),
     val audioState: AudioIntensityState = AudioIntensityState(),
-    val voronoiDiagram: VoronoiDiagram? = null
+    val voronoiDiagram: VoronoiDiagram? = null,
+    val activeHazards: List<HazardInstance> = emptyList(),
+    val activeGasClouds: List<ActiveGasCloud> = emptyList(),
+    val activeElectricArcs: List<ActiveElectricArc> = emptyList(),
+    val activeCryoFields: List<ActiveCryoField> = emptyList(),
+    val activeShockwaves: List<ActiveHazardShockwave> = emptyList(),
+    val hazardInteractionPrompt: HazardInteractionPrompt? = null
 )
 
 class GameEngine(
     val mission: Mission
 ) {
     val worldManager = VoxelWorldManager(width = mission.gridWidth, height = mission.gridHeight, maxDepth = 5, tileSize = 64f)
+    private val spatialGrid = SpatialGrid(worldWidth = mission.gridWidth * 64f, worldHeight = mission.gridHeight * 64f, cellSize = 64f)
+    val projectileManager = ProjectileManager(worldManager = worldManager, terrain = worldManager.terrain, spatialGrid = spatialGrid)
     val weaponSystem = WeaponSystem(worldManager)
     val terrain get() = worldManager.terrain
     val svdagEngine get() = worldManager.svdagEngine
     val enemyAI = EnemyAI(worldManager, terrain)
     val objectiveManager = ObjectiveManager()
     val audioManager = AdaptiveAudioManager()
+    val coverSystem = CoverSystem()
+    val fogOfWar = FogOfWarSystem(width = mission.gridWidth, height = mission.gridHeight, tileSize = 64f)
+    val hazardSystem = EnvironmentalHazardSystem()
     val voronoiDiagram = VoronoiDiagram(maxX = mission.gridWidth * 64f, maxY = mission.gridHeight * 64f)
     val openGlVboRenderer = OpenGlVboRenderer()
-
-    private val spatialGrid = SpatialGrid(worldWidth = mission.gridWidth * 64f, worldHeight = mission.gridHeight * 64f, cellSize = 64f)
 
     private val _gameState = MutableStateFlow(GameState(currentMission = mission))
     val gameState: StateFlow<GameState> = _gameState.asStateFlow()
@@ -94,6 +107,7 @@ class GameEngine(
 
     fun initMission() {
         worldManager.initializeWorld(mission.id, worldSeed = mission.id.hashCode().toLong())
+        projectileManager.clear()
 
         val p = PlayerState(
             x = terrain.spawnPointX,
@@ -175,11 +189,18 @@ class GameEngine(
 
         objectiveManager.initializeForMission(mission, terrain)
 
+        // Initialize Procedural Environmental Hazards
+        hazardSystem.initializeFromTerrain(terrain)
+
+        val defaultSquad = DefaultSquad.createDefaultSquad(terrain.spawnPointX, terrain.spawnPointY)
+
         _gameState.value = GameState(
             player = p,
+            squadMembers = defaultSquad,
             enemies = enemyList,
             currentMission = mission,
-            objectives = objectiveManager.objectives
+            objectives = objectiveManager.objectives,
+            activeHazards = hazardSystem.update(0f, p, enemyList, defaultSquad, terrain, mutableListOf(), mutableListOf(), mutableListOf()).activeHazards
         )
 
         // Initialize spatial grid for efficient enemy proximity queries
@@ -207,13 +228,46 @@ class GameEngine(
         val deltaSec = dtMs / 1000f
 
         val player = currState.player.copy()
+        val squadMembers = currState.squadMembers.map { it.copy() }.toMutableList()
         val enemies = currState.enemies.map { it.copy() }.toMutableList()
         val bullets = currState.bullets.map { it.copy() }.toMutableList()
         val particles = currState.particles.map { it.copy() }.toMutableList()
         val throwables = currState.throwables.map { it.copy() }.toMutableList()
 
         // 1. Update Player position & cover status
-        updatePlayerLogic(player, particles, deltaSec, now)
+        updatePlayerLogic(player, enemies, particles, deltaSec, now)
+
+        // 1b. Update Squad Companions (Drones and Scouts)
+        updateSquadLogic(squadMembers, player, enemies, deltaSec, now)
+
+        // 1c. Update Fog-of-War System (Shared Squad Vision & Raycasted Shadow Occlusion)
+        if (currState.isFogOfWarEnabled) {
+            fogOfWar.updateVisibility(player, squadMembers, enemies, terrain, deltaSec)
+        } else {
+            for (enemy in enemies) {
+                enemy.isVisibleInFog = true
+            }
+        }
+
+        // 1d. Update Environmental Hazards (Gas expansion, electric arcs, cryo freeze, countdowns)
+        val tempLights = mutableListOf<DynamicLight>()
+        val hazardResult = hazardSystem.update(
+            deltaSec = deltaSec,
+            player = player,
+            enemies = enemies,
+            squad = squadMembers,
+            terrain = terrain,
+            bullets = bullets,
+            particles = particles,
+            dynamicLights = tempLights
+        )
+
+        // If any hazard destroyed/modified voxels, rebuild SVDAG and sync
+        if (hazardResult.destroyedVoxelCoords.isNotEmpty()) {
+            for (coord in hazardResult.destroyedVoxelCoords) {
+                worldManager.applyVoxelDamage(coord.first, coord.second, 1, 999f, 0f, 2.0f)
+            }
+        }
 
         // 2. Update Bullets & Collisions
         updateBullets(bullets, player, enemies, particles, deltaSec)
@@ -266,7 +320,8 @@ class GameEngine(
         worldManager.updateWorldLOD(player.x, player.y)
 
         // Update Dynamic Lighting
-        val activeLights = updateDynamicLights(bullets, player, enemies, deltaSec)
+        val activeLights = updateDynamicLights(bullets, player, enemies, deltaSec).toMutableList()
+        activeLights.addAll(tempLights)
 
         // Compute predictive ricochet trajectory
         val trajectoryPoints = computeRicochetTrajectory(player, maxBounces = player.activeWeapon.maxRicochets)
@@ -288,8 +343,14 @@ class GameEngine(
             }
         }
 
+        val combinedShake = max(
+            (currState.screenShakeMs - dtMs).coerceAtLeast(0),
+            hazardResult.screenShakeMs
+        )
+
         _gameState.value = currState.copy(
             player = player,
+            squadMembers = squadMembers,
             enemies = enemies,
             bullets = bullets,
             particles = particles,
@@ -301,8 +362,10 @@ class GameEngine(
             ricochetTrajectoryPoints = trajectoryPoints,
             isVictory = isVictory,
             isGameOver = isGameOver,
-            screenShakeMs = (currState.screenShakeMs - dtMs).coerceAtLeast(0),
+            screenShakeMs = combinedShake,
             missionTimeMs = currState.missionTimeMs + dtMs,
+            explorationPercentage = fogOfWar.explorationPercentage,
+            activeRadarPings = fogOfWar.activeRadarPings.toList(),
             svdagCompressionRatio = svdagEngine.compressionRatio,
             uniqueDagNodes = svdagEngine.uniqueDagNodesCount,
             totalDagNodes = svdagEngine.totalUncompressedNodes,
@@ -310,7 +373,13 @@ class GameEngine(
             lod1Count = svdagEngine.lod1Count,
             lod2Count = svdagEngine.lod2Count,
             audioState = audioManager.audioState.value,
-            voronoiDiagram = voronoiDiagram
+            voronoiDiagram = voronoiDiagram,
+            activeHazards = hazardResult.activeHazards,
+            activeGasClouds = hazardResult.activeGasClouds,
+            activeElectricArcs = hazardResult.activeElectricArcs,
+            activeCryoFields = hazardResult.activeCryoFields,
+            activeShockwaves = hazardResult.activeShockwaves,
+            hazardInteractionPrompt = hazardResult.interactionPrompt
         )
     }
 
@@ -453,65 +522,7 @@ class GameEngine(
     }
 
     fun computeRicochetTrajectory(player: PlayerState, maxBounces: Int = 2): List<Pair<Float, Float>> {
-        val points = mutableListOf<Pair<Float, Float>>()
-        points.add(Pair(player.x, player.y))
-
-        var currX = player.x
-        var currY = player.y
-        var dirX = cos(player.aimAngle)
-        var dirY = sin(player.aimAngle)
-
-        val stepSize = 18f
-        val maxSteps = 28
-
-        var currentBounces = 0
-        var lastTileKey: String? = null
-
-        while (currentBounces <= maxBounces && points.size < 50) {
-            var segmentHit = false
-
-            for (step in 0 until maxSteps) {
-                val nextX = currX + dirX * stepSize
-                val nextY = currY + dirY * stepSize
-
-                val tile = terrain.getTileAtWorld(nextX, nextY)
-                if (tile != null && tile.coverHeight != CoverHeight.NONE && !tile.isDisintegrated) {
-                    val tileKey = "${tile.gridX}_${tile.gridY}"
-                    if (tileKey != lastTileKey) {
-                        points.add(Pair(nextX, nextY))
-
-                        val tileCenterX = (tile.gridX + 0.5f) * terrain.tileSize
-                        val tileCenterY = (tile.gridY + 0.5f) * terrain.tileSize
-                        val dx = nextX - tileCenterX
-                        val dy = nextY - tileCenterY
-
-                        val nx = if (abs(dx) > abs(dy)) (if (dx > 0) 1f else -1f) else 0f
-                        val ny = if (abs(dx) <= abs(dy)) (if (dy > 0) 1f else -1f) else 0f
-
-                        val dot = dirX * nx + dirY * ny
-                        dirX = dirX - 2f * dot * nx
-                        dirY = dirY - 2f * dot * ny
-
-                        currX = nextX + nx * 5f
-                        currY = nextY + ny * 5f
-                        lastTileKey = tileKey
-                        currentBounces++
-                        segmentHit = true
-                        break
-                    }
-                }
-
-                currX = nextX
-                currY = nextY
-            }
-
-            if (!segmentHit) {
-                points.add(Pair(currX, currY))
-                break
-            }
-        }
-
-        return points
+        return projectileManager.computeRicochetTrajectoryPoints(player, maxBounces)
     }
 
     fun triggerPlayerShot() {
@@ -562,6 +573,22 @@ class GameEngine(
             x = p.x + cos(recoil.deflectedAngleRad) * 20f,
             y = p.y + sin(recoil.deflectedAngleRad) * 20f,
             color = bulletColor
+        )
+
+        // Trigger real-time voxel grid block modification and destruction when player fires
+        val isExplosive = weapon.type == WeaponType.PLASMA_RIFLE || weapon.damageType == com.example.data.model.WeaponDamageType.HIGH_EXPLOSIVE
+        worldManager.processPlayerFireDestruction(
+            originX = p.x,
+            originY = p.y,
+            originZ = 1.5f,
+            aimAngle = recoil.deflectedAngleRad,
+            damage = weapon.effectiveDamage.toFloat(),
+            damageType = weapon.damageType,
+            maxDistance = 800f,
+            kineticForce = 1.2f,
+            isExplosive = isExplosive,
+            explosionRadius = if (isExplosive) 120f else 0f,
+            pierceCover = weapon.pierceCover
         )
 
         // Also trigger 3D projectile in WeaponSystem
@@ -727,6 +754,67 @@ class GameEngine(
         )
     }
 
+    fun toggleFogOfWar() {
+        _gameState.value = _gameState.value.copy(
+            isFogOfWarEnabled = !_gameState.value.isFogOfWarEnabled
+        )
+    }
+
+    fun triggerReconSonarScan() {
+        val p = _gameState.value.player
+        fogOfWar.triggerRadarPing(p.x, p.y, maxRadius = 750f)
+        SoundFX.play(SoundFX.SoundType.RELOAD)
+        val particles = _gameState.value.particles.toMutableList()
+        particles.add(
+            Particle(
+                x = p.x, y = p.y, vx = 0f, vy = -20f,
+                color = Color(0xFF00F0FF), size = 13f,
+                type = ParticleType.HIT_NUMBER, text = "SONAR SCAN PULSE!"
+            )
+        )
+        _gameState.value = _gameState.value.copy(particles = particles)
+    }
+
+    fun triggerHazardInteraction() {
+        val prompt = _gameState.value.hazardInteractionPrompt ?: return
+        val particles = _gameState.value.particles.toMutableList()
+        val lights = _gameState.value.dynamicLights.toMutableList()
+        val destroyed = mutableListOf<Pair<Int, Int>>()
+        val player = _gameState.value.player
+        val enemies = _gameState.value.enemies.toMutableList()
+
+        val success = hazardSystem.interactWithHazard(
+            hazardId = prompt.hazardId,
+            terrain = terrain,
+            enemies = enemies,
+            player = player,
+            spawnedParticles = particles,
+            spawnedLights = lights,
+            destroyedCoords = destroyed
+        )
+
+        if (success) {
+            particles.add(
+                Particle(
+                    x = player.x,
+                    y = player.y,
+                    vx = 0f,
+                    vy = -20f,
+                    color = Color(0xFF00F0FF),
+                    size = 14f,
+                    type = ParticleType.HIT_NUMBER,
+                    text = "${prompt.actionName} ACTIVATED!"
+                )
+            )
+            _gameState.value = _gameState.value.copy(
+                enemies = enemies,
+                particles = particles,
+                dynamicLights = lights,
+                screenShakeMs = 350L
+            )
+        }
+    }
+
     fun swapWeapon() {
         val p = _gameState.value.player
         val nextSlot = if (p.activeWeaponSlot == 1) 2 else 1
@@ -739,7 +827,49 @@ class GameEngine(
         )
     }
 
-    private fun updatePlayerLogic(player: PlayerState, particles: MutableList<Particle>, deltaSec: Float, now: Long) {
+    private fun updateSquadLogic(
+        squad: MutableList<SquadMember>,
+        player: PlayerState,
+        enemies: List<Enemy>,
+        deltaSec: Float,
+        now: Long
+    ) {
+        for (member in squad) {
+            if (!member.isAlive) continue
+
+            // Formation position relative to player facing angle and follow offset
+            val baseAngle = player.facingAngle + member.followAngleOffset
+            val targetX = player.x + cos(baseAngle) * member.followDistance
+            val targetY = player.y + sin(baseAngle) * member.followDistance
+
+            // Smooth companion movement towards formation anchor
+            val lerpFactor = (4.5f * deltaSec).coerceIn(0f, 1f)
+            member.x += (targetX - member.x) * lerpFactor
+            member.y += (targetY - member.y) * lerpFactor
+
+            // Drone continuous rotation & Scout directional orientation
+            if (member.isOmnidirectionalVision) {
+                member.facingAngle = (member.facingAngle + deltaSec * 1.5f) % (Math.PI.toFloat() * 2f)
+            } else {
+                val nearestThreat = enemies.filter { it.isAlive }.minByOrNull {
+                    (it.x - member.x) * (it.x - member.x) + (it.y - member.y) * (it.y - member.y)
+                }
+                if (nearestThreat != null && hypot(nearestThreat.x - member.x, nearestThreat.y - member.y) < 400f) {
+                    member.facingAngle = atan2(nearestThreat.y - member.y, nearestThreat.x - member.x)
+                } else {
+                    member.facingAngle = player.facingAngle + member.followAngleOffset * 0.5f
+                }
+            }
+        }
+    }
+
+    private fun updatePlayerLogic(
+        player: PlayerState,
+        enemies: List<Enemy>,
+        particles: MutableList<Particle>,
+        deltaSec: Float,
+        now: Long
+    ) {
         // Handle Reloading timer
         if (player.isReloading) {
             player.reloadTimerMs -= (deltaSec * 1000).toLong()
@@ -763,11 +893,37 @@ class GameEngine(
         // Process Automatic Cover Snap system against adjacent voxel obstacles
         processCoverSnapForPlayer(player, particles, deltaSec)
 
-        // Shield recharge timer
+        // Real-time Cover Defensive Buff evaluation relative to nearest active threat
+        val nearestThreat = enemies.filter { it.isAlive }
+            .minByOrNull { (it.x - player.x) * (it.x - player.x) + (it.y - player.y) * (it.y - player.y) }
+
+        val coverEval = coverSystem.evaluateCoverBuff(
+            entityX = player.x,
+            entityY = player.y,
+            facingAngle = player.facingAngle,
+            threatX = nearestThreat?.x,
+            threatY = nearestThreat?.y,
+            stance = player.stance,
+            terrain = terrain,
+            coverTileX = player.coverTileX,
+            coverTileY = player.coverTileY
+        )
+
+        player.activeCoverType = coverEval.coverTile?.type
+        player.activeCoverBuffTitle = if (coverEval.isCovered) coverEval.buffBadgeTitle else null
+        player.activeCoverBuffSubtitle = if (coverEval.isCovered) coverEval.buffBadgeSubtitle else null
+        player.activeCoverDamageMitigation = coverEval.damageMitigationFraction
+        player.activeCoverShieldBonus = coverEval.shieldRechargeMultiplier
+        player.activeCoverAccuracyBonus = coverEval.accuracyBonusMultiplier
+        player.isCoverFlanked = coverEval.isFlanked
+
+        // Shield recharge timer (accelerated by active cover buff)
         if (player.nanoShield < player.maxNanoShield) {
             player.shieldRechargeDelayMs -= (deltaSec * 1000).toLong()
             if (player.shieldRechargeDelayMs <= 0) {
-                player.nanoShield = (player.nanoShield + 15f * deltaSec).coerceAtMost(player.maxNanoShield)
+                val baseRechargeRate = 15f
+                val effectiveRechargeRate = baseRechargeRate * coverEval.shieldRechargeMultiplier
+                player.nanoShield = (player.nanoShield + effectiveRechargeRate * deltaSec).coerceAtMost(player.maxNanoShield)
             }
         }
     }
@@ -779,278 +935,54 @@ class GameEngine(
         particles: MutableList<Particle>,
         deltaSec: Float
     ) {
-        val iterator = bullets.iterator()
-        while (iterator.hasNext()) {
-            val b = iterator.next()
-            b.x += b.vx * deltaSec
-            b.y += b.vy * deltaSec
-            b.lifeMs -= (deltaSec * 1000).toLong()
+        projectileManager.setBullets(bullets)
+        val result = projectileManager.update(deltaSec, player, enemies)
 
-            if (b.lifeMs <= 0) {
-                iterator.remove()
-                continue
-            }
+        bullets.clear()
+        bullets.addAll(result.activeBullets)
+        particles.addAll(result.particlesSpawned)
 
-            // Check Voxel Tile collision
-            val tile = terrain.getTileAtWorld(b.x, b.y)
-            if (tile != null && tile.coverHeight != CoverHeight.NONE && !tile.isDisintegrated) {
-                if (!b.pierceCover) {
-                    val bulletAngle = atan2(b.vy, b.vx)
-                    val tileKey = "${tile.gridX}_${tile.gridY}"
-                    val canRicochet = b.ricochetCount < b.maxRicochets && b.lastHitTileKey != tileKey
-
-                    // Damage voxel cover with mesh deformation (half damage if ricocheting off)
-                    val damageToTile = if (canRicochet) b.damage * 0.45f else b.damage
-                    val destroyed = terrain.applyDamageToTile(tile.gridX, tile.gridY, damageToTile, bulletAngle)
-                    val impactX = b.x
-                    val impactY = b.y
-                    val isBarrel = tile.type == VoxelType.EXPLOSIVE_BARREL
-
-                    spawnImpactLight(impactX, impactY, color = if (isBarrel) Color(0xFFFFB703) else Color(0xFF00F0FF), radius = 135f)
-                    spawnDebrisParticles(
-                        particles = particles,
-                        x = impactX,
-                        y = impactY,
-                        count = if (destroyed) 22 else 12,
-                        impactAngleRad = bulletAngle,
-                        tileType = tile.type
-                    )
-
-                    if (destroyed) {
-                        SoundFX.play(SoundFX.SoundType.EXPLOSION)
-                        spawnExplosionLight(impactX, impactY, radius = if (isBarrel) 420f else 240f, intensity = 2.5f, color = if (isBarrel) Color(0xFFFF4500) else Color(0xFFFFA500))
-                        iterator.remove()
-                        continue
-                    }
-
-                    if (canRicochet) {
-                        // Calculate surface reflection normal
-                        val tileCenterX = (tile.gridX + 0.5f) * terrain.tileSize
-                        val tileCenterY = (tile.gridY + 0.5f) * terrain.tileSize
-                        val dx = b.x - tileCenterX
-                        val dy = b.y - tileCenterY
-
-                        val nx = if (abs(dx) > abs(dy)) (if (dx > 0) 1f else -1f) else 0f
-                        val ny = if (abs(dx) <= abs(dy)) (if (dy > 0) 1f else -1f) else 0f
-
-                        val dot = b.vx * nx + b.vy * ny
-                        var rx = b.vx - 2f * dot * nx
-                        var ry = b.vy - 2f * dot * ny
-
-                        // Smart Target Seeking Ricochet: bend reflection toward nearest living enemy
-                        var bestEnemyTarget: Enemy? = null
-                        var bestEnemyDistSq = Float.MAX_VALUE
-                        for (e in enemies) {
-                            if (!e.isAlive) continue
-                            val edistSq = (e.x - impactX) * (e.x - impactX) + (e.y - impactY) * (e.y - impactY)
-                            if (edistSq < 380f * 380f && edistSq < bestEnemyDistSq) {
-                                bestEnemyDistSq = edistSq
-                                bestEnemyTarget = e
-                            }
-                        }
-
-                        if (bestEnemyTarget != null) {
-                            val seekDx = bestEnemyTarget.x - impactX
-                            val seekDy = bestEnemyTarget.y - impactY
-                            val seekDistSq = seekDx * seekDx + seekDy * seekDy
-                            val currentSpeedSq = rx * rx + ry * ry
-
-                            rx = rx * 0.35f + (seekDx / sqrt(seekDistSq) * sqrt(currentSpeedSq)) * 0.65f
-                            ry = ry * 0.35f + (seekDy / sqrt(seekDistSq) * sqrt(currentSpeedSq)) * 0.65f
-                        }
-
-                        b.vx = rx * 0.88f
-                        b.vy = ry * 0.88f
-                        b.x += nx * 6f
-                        b.y += ny * 6f
-                        b.ricochetCount++
-                        b.lastHitTileKey = tileKey
-
-                        SoundFX.play(SoundFX.SoundType.RICOCHET)
-
-                        // Spawn ricochet spark effect
-                        for (i in 0 until 5) {
-                            val sparkAngle = atan2(ry, rx) + (Random.nextFloat() * 1.2f - 0.6f)
-                            val speed = Random.nextFloat() * 150f + 50f
-                            particles.add(
-                                Particle(
-                                    x = impactX,
-                                    y = impactY,
-                                    vx = cos(sparkAngle) * speed,
-                                    vy = sin(sparkAngle) * speed,
-                                    color = Color(0xFF00F0FF),
-                                    size = Random.nextFloat() * 4f + 3f,
-                                    life = 0.5f,
-                                    maxLife = 0.5f,
-                                    type = ParticleType.PLASMA_SPARK
-                                )
-                            )
-                        }
-
-                        // Floating text indicator
-                        particles.add(
-                            Particle(
-                                x = impactX, y = impactY - 12f, vx = 0f, vy = -20f,
-                                color = Color(0xFF00F0FF),
-                                size = 12f,
-                                type = ParticleType.HIT_NUMBER,
-                                text = "RICOCHET!"
-                            )
-                        )
-                    } else {
-                        SoundFX.play(SoundFX.SoundType.HIT_WALL)
-                        iterator.remove()
-                        continue
+        for (event in result.impactEvents) {
+            event.soundEffect?.let { SoundFX.play(it) }
+            if (event.isVoxelHit && event.gridX != null && event.gridY != null) {
+                val destroyedCoords = mutableListOf<Pair<Int, Int>>()
+                hazardSystem.onVoxelDamaged(
+                    gx = event.gridX,
+                    gy = event.gridY,
+                    damage = event.damageDealt,
+                    damageType = player.activeWeapon.damageType,
+                    isPlayerBullet = true,
+                    terrain = terrain,
+                    enemies = enemies,
+                    player = player,
+                    spawnedParticles = particles,
+                    spawnedLights = mutableListOf(),
+                    destroyedCoords = destroyedCoords
+                )
+                if (destroyedCoords.isNotEmpty()) {
+                    for (c in destroyedCoords) {
+                        worldManager.applyVoxelDamage(c.first, c.second, 1, 999f, 0f, 2.0f)
                     }
                 }
             }
+        }
 
-            // Check Enemy hits if player bullet
-            if (b.isPlayerBullet) {
-                // Use spatial grid to find only nearby enemies (radius ~26f = 1 tile)
-                val potentialHits = spatialGrid.queryRadius(b.x, b.y, 26f)
-                for (e in potentialHits) {
-                    if (!e.isAlive) continue
-                    val distSq = (b.x - e.x) * (b.x - e.x) + (b.y - e.y) * (b.y - e.y)
-                    if (distSq < 26f * 26f) {
-                        // Flanking & Cover damage calculation
-                        val hitAngle = atan2(b.y - e.y, b.x - e.x)
-                        val angleDiff = abs(hitAngle - e.facingAngle)
-                        val isFlanked = angleDiff > Math.toRadians(90.0)
+        for (killed in result.enemiesKilled) {
+            player.killsCount++
+            player.credits += killed.bountyReward
+        }
 
-                        var finalDmg = b.damage
-                        if (e.isBehindCover && !isFlanked) {
-                            finalDmg *= 0.3f // Cover mitigation
-                        } else if (isFlanked) {
-                            finalDmg *= 1.8f // Flanking critical bonus!
-                        }
-
-                        // Apply to enemy shield first then health
-                        if (e.shieldHp > 0) {
-                            e.shieldHp -= finalDmg
-                            if (e.shieldHp < 0) {
-                                e.health += e.shieldHp
-                                e.shieldHp = 0f
-                            }
-                        } else {
-                            e.health -= finalDmg
-                        }
-
-                        e.state = AIState.ENGAGED
-                        e.lastKnownPlayerX = player.x
-                        e.lastKnownPlayerY = player.y
-
-                        // Spawn Floating Damage Text Particle
-                        particles.add(
-                            Particle(
-                                x = e.x, y = e.y - 15f, vx = 0f, vy = -30f,
-                                color = if (isFlanked) Color(0xFFF59E0B) else Color(0xFF00F0FF),
-                                size = 16f,
-                                type = ParticleType.HIT_NUMBER,
-                                text = if (isFlanked) "CRIT ${finalDmg.toInt()}" else "${finalDmg.toInt()}"
-                            )
-                        )
-
-                        if (!e.isAlive) {
-                            player.killsCount++
-                            player.credits += e.bountyReward
-                            spawnDebrisParticles(particles, e.x, e.y)
-                        }
-
-                        spawnImpactLight(e.x, e.y, color = Color(0xFF00F0FF), radius = 120f)
-
-                        iterator.remove()
-                        break
-                    }
+        if (result.playerDamageTaken > 0f) {
+            if (player.nanoShield > 0f) {
+                player.nanoShield -= result.playerDamageTaken
+                if (player.nanoShield < 0f) {
+                    player.health += player.nanoShield
+                    player.nanoShield = 0f
                 }
             } else {
-                // Enemy bullet hits player
-                val distSq = (b.x - player.x) * (b.x - player.x) + (b.y - player.y) * (b.y - player.y)
-                if (distSq < 24f * 24f) {
-                    var dmg = b.damage
-                    var wasMitigatedByCover = false
-
-                    if (player.isBehindCover) {
-                        // Check if bullet came from front or rear (flank) relative to cover obstacle
-                        val cx = player.coverTileX
-                        val cy = player.coverTileY
-                        if (cx != null && cy != null) {
-                            val tileCenterX = (cx + 0.5f) * terrain.tileSize
-                            val tileCenterY = (cy + 0.5f) * terrain.tileSize
-                            val bulletAngle = atan2(b.vy, b.vx)
-                            val coverAngle = atan2(tileCenterY - player.y, tileCenterX - player.x)
-                            val angleDiff = abs(bulletAngle - coverAngle)
-
-                            // If bullet is traveling towards cover face (front angle), cover absorbs damage!
-                            if (angleDiff > Math.toRadians(80.0)) {
-                                wasMitigatedByCover = true
-                                // Voxel obstacle absorbs impact
-                                val coverTile = terrain.tiles.getOrNull(cx)?.getOrNull(cy)
-                                val destroyed = terrain.applyDamageToTile(cx, cy, b.damage, bulletAngle)
-                                spawnDebrisParticles(
-                                    particles = particles,
-                                    x = tileCenterX,
-                                    y = tileCenterY,
-                                    count = if (destroyed) 20 else 10,
-                                    impactAngleRad = bulletAngle,
-                                    tileType = coverTile?.type
-                                )
-                                if (destroyed) {
-                                    SoundFX.play(SoundFX.SoundType.EXPLOSION)
-                                }
-
-                                // Apply heavy damage mitigation to player based on cover height & stance
-                                dmg *= when {
-                                    player.stance == PlayerStance.PRONE -> 0.10f
-                                    player.coverHeight == CoverHeight.HIGH -> 0.15f
-                                    player.coverHeight == CoverHeight.LOW -> 0.38f
-                                    else -> 0.50f
-                                }
-                            } else {
-                                // Flanked! Bullet bypassed cover from behind
-                                dmg *= 1.4f
-                                particles.add(
-                                    Particle(
-                                        x = player.x, y = player.y - 15f, vx = 0f, vy = -20f,
-                                        color = Color(0xFFEF4444), size = 14f,
-                                        type = ParticleType.HIT_NUMBER, text = "FLANKED! 1.4x"
-                                    )
-                                )
-                            }
-                        } else {
-                            // General proximity cover mitigation
-                            dmg *= when (player.coverHeight) {
-                                CoverHeight.HIGH -> 0.20f
-                                CoverHeight.LOW -> 0.45f
-                                else -> 1.0f
-                            }
-                        }
-                    }
-
-                    if (wasMitigatedByCover) {
-                        particles.add(
-                            Particle(
-                                x = player.x, y = player.y - 10f, vx = 0f, vy = -15f,
-                                color = Color(0xFF00F0FF), size = 12f,
-                                type = ParticleType.HIT_NUMBER, text = "-${dmg.toInt()} (COVER)"
-                            )
-                        )
-                    }
-
-                    if (player.nanoShield > 0) {
-                        player.nanoShield -= dmg
-                        if (player.nanoShield < 0) {
-                            player.health += player.nanoShield
-                            player.nanoShield = 0f
-                        }
-                    } else {
-                        player.health -= dmg
-                    }
-                    player.shieldRechargeDelayMs = 3500
-
-                    iterator.remove()
-                }
+                player.health -= result.playerDamageTaken
             }
+            player.shieldRechargeDelayMs = 3500
         }
     }
 

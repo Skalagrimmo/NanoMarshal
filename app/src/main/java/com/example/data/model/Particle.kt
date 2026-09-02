@@ -10,7 +10,11 @@ enum class ParticleType {
     STEALTH_PULSE,
     SMOKE_NANO,
     ACID_SPLASH,
-    HIT_NUMBER
+    HIT_NUMBER,
+    ELECTRIC_BOLT,
+    NANITE_SPORE,
+    CRYO_CRYSTAL,
+    PLASMA_WAVE
 }
 
 data class Particle(
