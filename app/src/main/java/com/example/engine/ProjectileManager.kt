@@ -502,11 +502,16 @@ class ProjectileManager(
                             coverTileY = hitEnemy.targetCoverY
                         )
 
-                        val finalDamage = coverSystem.calculateMitigatedDamage(
+                        val isAmbush = bullet.isPlayerBullet && !hitEnemy.hasDirectLineOfSightToPlayer &&
+                                (hitEnemy.state == AIState.PATROL || hitEnemy.state == AIState.SUSPICIOUS)
+                        val ambushMultiplier = if (isAmbush) 1.75f else 1.0f
+
+                        val baseMitigated = coverSystem.calculateMitigatedDamage(
                             rawDamage = bullet.damage,
                             coverEval = enemyCoverEval,
                             isCritFlank = isFlanked
                         )
+                        val finalDamage = baseMitigated * ambushMultiplier
 
                         // Apply to enemy shield then health
                         if (hitEnemy.shieldHp > 0f) {
@@ -526,16 +531,28 @@ class ProjectileManager(
                         hitEnemy.isCoverFlanked = isFlanked
 
                         // Spawn damage number particle
+                        val hitColor = when {
+                            isAmbush -> Color(0xFF10B981) // Emerald for ambush
+                            isFlanked -> Color(0xFFF59E0B)
+                            enemyCoverEval.isCovered -> Color(0xFF38BDF8)
+                            else -> Color(0xFF00F0FF)
+                        }
+                        val hitText = when {
+                            isAmbush -> "AMBUSH ${finalDamage.toInt()}!"
+                            isFlanked -> "CRIT ${finalDamage.toInt()}"
+                            enemyCoverEval.isCovered -> "-${finalDamage.toInt()} (DEF)"
+                            else -> "${finalDamage.toInt()}"
+                        }
                         spawnedParticles.add(
                             Particle(
                                 x = hitEnemy.x,
                                 y = hitEnemy.y - 15f,
                                 vx = 0f,
                                 vy = -30f,
-                                color = if (isFlanked) Color(0xFFF59E0B) else if (enemyCoverEval.isCovered) Color(0xFF38BDF8) else Color(0xFF00F0FF),
-                                size = if (isFlanked) 17f else 14f,
+                                color = hitColor,
+                                size = if (isAmbush || isFlanked) 17f else 14f,
                                 type = ParticleType.HIT_NUMBER,
-                                text = if (isFlanked) "CRIT ${finalDamage.toInt()}" else if (enemyCoverEval.isCovered) "-${finalDamage.toInt()} (DEF)" else "${finalDamage.toInt()}"
+                                text = hitText
                             )
                         )
 
@@ -543,6 +560,21 @@ class ProjectileManager(
                         if (!hitEnemy.isAlive) {
                             killedEnemies.add(hitEnemy)
                             totalCredits += hitEnemy.bountyReward
+                            if (isAmbush) {
+                                player.stealthKillsCount++
+                                spawnedParticles.add(
+                                    Particle(
+                                        x = hitEnemy.x,
+                                        y = hitEnemy.y - 32f,
+                                        vx = 0f,
+                                        vy = -18f,
+                                        color = Color(0xFF10B981),
+                                        size = 14f,
+                                        type = ParticleType.HIT_NUMBER,
+                                        text = "STEALTH TAKEDOWN!"
+                                    )
+                                )
+                            }
                             spawnedParticles.addAll(
                                 createVoxelDebrisParticles(
                                     x = hitEnemy.x,

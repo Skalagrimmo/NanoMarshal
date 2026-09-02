@@ -24,6 +24,7 @@ import com.example.data.model.ObjectiveStatus
 import com.example.data.model.PlayerStance
 import com.example.engine.AudioIntensityCategory
 import com.example.engine.GameState
+import com.example.engine.StealthStatus
 import com.example.ui.theme.*
 
 @Composable
@@ -119,8 +120,73 @@ fun TacticalHUD(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = if (gameState.isFogOfWarEnabled) "FOG: ON" else "FOG: OFF",
+                                text = if (gameState.isFogOfWarEnabled) "FOG: ${gameState.explorationPercentage.toInt()}%" else "FOG: OFF",
                                 color = if (gameState.isFogOfWarEnabled) NanoCyan else TextMuted,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Recon Sonar Scan Pulse Button
+                    Surface(
+                        onClick = onTriggerSonarScan,
+                        modifier = Modifier.testTag("recon_sonar_scan_button"),
+                        shape = RoundedCornerShape(16.dp),
+                        color = VoidDark.copy(alpha = 0.85f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, NanoCyan)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Sensors,
+                                contentDescription = "Sonar Scan",
+                                tint = NanoCyan,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "SCAN",
+                                color = NanoCyan,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Tactical Stealth Status Indicator
+                    val stealth = gameState.stealthEval
+                    val stealthColor = Color(stealth.statusColorHex)
+                    Surface(
+                        modifier = Modifier.testTag("tactical_stealth_pill"),
+                        shape = RoundedCornerShape(16.dp),
+                        color = VoidDark.copy(alpha = 0.85f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, stealthColor)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = when (stealth.status) {
+                                    StealthStatus.HIDDEN -> Icons.Default.Shield
+                                    StealthStatus.CAUTION -> Icons.Default.Warning
+                                    StealthStatus.DETECTED -> Icons.Default.PriorityHigh
+                                },
+                                contentDescription = "Stealth Status",
+                                tint = stealthColor,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = when (stealth.status) {
+                                    StealthStatus.HIDDEN -> "STEALTH"
+                                    StealthStatus.CAUTION -> "CAUTION"
+                                    StealthStatus.DETECTED -> "ALERT"
+                                },
+                                color = stealthColor,
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold
                             )

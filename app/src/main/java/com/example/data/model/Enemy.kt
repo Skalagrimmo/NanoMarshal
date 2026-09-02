@@ -49,6 +49,7 @@ data class Enemy(
     var isVisibleInFog: Boolean = false,
     var radarPingAlpha: Float = 0f,
     var audioTremorDetected: Boolean = false,
+    var hasDirectLineOfSightToPlayer: Boolean = false,
     var bountyReward: Int = 200,
     val weaponName: String = "Plasma Carbine",
     val weaponDamage: Float = 15f

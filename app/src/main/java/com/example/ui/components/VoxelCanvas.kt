@@ -24,6 +24,7 @@ import com.example.data.model.*
 import com.example.engine.GaussianElimination
 import com.example.engine.GameState
 import com.example.engine.OpenGlVboRenderer
+import com.example.engine.StealthStatus
 import com.example.engine.VoronoiDiagram
 import com.example.engine.VoxelMaterialShader
 import com.example.engine.VoxelTerrain
@@ -859,6 +860,68 @@ fun VoxelCanvas(
                     )
                 }
 
+                // Stealth & Ambush status floating badge
+                val stealth = gameState.stealthEval
+                if (gameState.isFogOfWarEnabled && player.isAlive) {
+                    if (stealth.status == StealthStatus.HIDDEN) {
+                        val pulse = 0.55f + 0.25f * sin((System.currentTimeMillis() % 2000L) / 318f)
+                        drawCircle(
+                            color = NaniteEmerald.copy(alpha = pulse),
+                            radius = 23f,
+                            center = Offset(player.x, player.y),
+                            style = Stroke(width = 1.8f)
+                        )
+                        drawSafeText(
+                            textMeasurer = textMeasurer,
+                            text = "AMBUSH READY (+75%)",
+                            style = TextStyle(color = NaniteEmerald, fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                            topLeft = Offset(player.x - 50f, player.y + 24f)
+                        )
+                    } else if (stealth.status == StealthStatus.CAUTION) {
+                        drawCircle(
+                            color = HazardYellow.copy(alpha = 0.65f),
+                            radius = 23f,
+                            center = Offset(player.x, player.y),
+                            style = Stroke(width = 1.8f)
+                        )
+                        drawSafeText(
+                            textMeasurer = textMeasurer,
+                            text = "NOISE HEARD!",
+                            style = TextStyle(color = HazardYellow, fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                            topLeft = Offset(player.x - 32f, player.y + 24f)
+                        )
+                    } else if (stealth.status == StealthStatus.DETECTED) {
+                        drawCircle(
+                            color = LaserRed.copy(alpha = 0.75f),
+                            radius = 23f,
+                            center = Offset(player.x, player.y),
+                            style = Stroke(width = 2f)
+                        )
+                        drawSafeText(
+                            textMeasurer = textMeasurer,
+                            text = "DETECTED (${stealth.detectingEnemiesCount})",
+                            style = TextStyle(color = LaserRed, fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                            topLeft = Offset(player.x - 38f, player.y + 24f)
+                        )
+                    }
+
+                    // Tactical Sensor Flashlight Cone for Player
+                    val fovAngleRad = when (player.stance) {
+                        PlayerStance.STAND -> Math.toRadians(150.0).toFloat()
+                        PlayerStance.CROUCH -> Math.toRadians(135.0).toFloat()
+                        PlayerStance.PRONE -> Math.toRadians(115.0).toFloat()
+                    }
+                    val aimDir = if (player.aimAngle != 0f) player.aimAngle else player.facingAngle
+                    val beamRange = if (player.isFiring) 640f else 540f
+                    drawVisionCone(
+                        origin = Offset(player.x, player.y),
+                        facingAngle = aimDir,
+                        range = beamRange,
+                        fovAngleRad = fovAngleRad,
+                        color = NanoCyan.copy(alpha = 0.05f)
+                    )
+                }
+
                 // 8. Render World-Space Objective Zones, Terminal Rings & Beacons
                 drawWorldObjectiveOverlays(gameState = gameState, textMeasurer = textMeasurer)
             }
@@ -896,6 +959,7 @@ private fun DrawScope.drawTerrainGrid(
     val isTacticalOverlayEnabled = gameState.isTacticalGridOverlayEnabled
     val dynamicLights = gameState.dynamicLights
     val isFogActive = gameState.isFogOfWarEnabled
+    val fogSnapshot = gameState.fogSnapshot
 
     for (gx in startGx..endGx) {
         for (gy in startGy..endGy) {
@@ -905,8 +969,11 @@ private fun DrawScope.drawTerrainGrid(
             val tileCenterX = worldX + terrain.tileSize / 2f
             val tileCenterY = worldY + terrain.tileSize / 2f
 
-            val isVisibleInSight = if (isFogActive) {
-                isTileVisibleToSquadOrPlayer(tileCenterX, tileCenterY, player, gameState.squadMembers, terrain)
+            val isVisibleInSight = if (isFogActive && fogSnapshot != null) {
+                fogSnapshot.currentVisible.getOrNull(gx)?.getOrNull(gy) ?: false
+            } else true
+            val isExplored = if (isFogActive && fogSnapshot != null) {
+                fogSnapshot.explored.getOrNull(gx)?.getOrNull(gy) ?: true
             } else true
 
             val hasLoS = isVisibleInSight
@@ -1225,27 +1292,64 @@ private fun DrawScope.drawTerrainGrid(
 
             // Fog of War Top-Down Alien Obscuration Shroud
             if (isFogActive && !isVisibleInSight) {
-                val dx = tileCenterX - playerX
-                val dy = tileCenterY - playerY
-                val distFromPlayer = sqrt(dx * dx + dy * dy)
-
-                // Explored tactical memory vs dense alien pitch black void
-                val shroudAlpha = if (distFromPlayer < 650f) 0.65f else 0.94f
-                drawRect(
-                    color = VoidDark.copy(alpha = shroudAlpha),
-                    topLeft = Offset(worldX, worldY),
-                    size = Size(terrain.tileSize, terrain.tileSize)
-                )
-                if (shroudAlpha > 0.8f) {
-                    val mistRand = ((gx * 31 + gy * 17) % 7)
+                if (isExplored) {
+                    // Explored tactical memory blueprint shroud
+                    drawRect(
+                        color = VoidDark.copy(alpha = 0.58f),
+                        topLeft = Offset(worldX, worldY),
+                        size = Size(terrain.tileSize, terrain.tileSize)
+                    )
+                    drawRect(
+                        color = NanoCyan.copy(alpha = 0.08f),
+                        topLeft = Offset(worldX, worldY),
+                        size = Size(terrain.tileSize, terrain.tileSize),
+                        style = Stroke(width = 1f)
+                    )
+                } else {
+                    // Dense alien pitch black void
+                    drawRect(
+                        color = VoidDark.copy(alpha = 0.96f),
+                        topLeft = Offset(worldX, worldY),
+                        size = Size(terrain.tileSize, terrain.tileSize)
+                    )
+                    val mistRand = ((gx * 31 + gy * 17) % 5)
                     if (mistRand == 0) {
                         drawCircle(
-                            color = NanoPurple.copy(alpha = 0.35f),
-                            radius = 4f,
+                            color = NanoPurple.copy(alpha = 0.28f),
+                            radius = 5f,
                             center = Offset(tileCenterX, tileCenterY)
                         )
                     }
                 }
+            } else if (isFogActive && isVisibleInSight) {
+                // Line-of-sight perimeter boundary glow
+                val hasAdjacentHidden = (gx > 0 && !(fogSnapshot?.currentVisible?.getOrNull(gx - 1)?.getOrNull(gy) ?: true)) ||
+                        (gx < terrain.width - 1 && !(fogSnapshot?.currentVisible?.getOrNull(gx + 1)?.getOrNull(gy) ?: true)) ||
+                        (gy > 0 && !(fogSnapshot?.currentVisible?.getOrNull(gx)?.getOrNull(gy - 1) ?: true)) ||
+                        (gy < terrain.height - 1 && !(fogSnapshot?.currentVisible?.getOrNull(gx)?.getOrNull(gy + 1) ?: true))
+                if (hasAdjacentHidden) {
+                    drawRect(
+                        color = NanoCyan.copy(alpha = 0.22f),
+                        topLeft = Offset(worldX, worldY),
+                        size = Size(terrain.tileSize, terrain.tileSize),
+                        style = Stroke(width = 1.2f)
+                    )
+                }
+            }
+        }
+    }
+
+    // Drifting Alien Fog Mist Particles across visible canvas
+    if (isFogActive && fogSnapshot != null) {
+        for (mp in fogSnapshot.mistParticles) {
+            if (mp.x >= cameraX - 100f && mp.x <= cameraX + canvasWidth + 100f &&
+                mp.y >= cameraY - 100f && mp.y <= cameraY + canvasHeight + 100f) {
+                val pAlpha = (mp.alpha * (0.8f + 0.2f * sin(mp.pulsePhase))).coerceIn(0f, 1f)
+                drawCircle(
+                    color = Color(0xFF090D1A).copy(alpha = pAlpha),
+                    radius = mp.size,
+                    center = Offset(mp.x, mp.y)
+                )
             }
         }
     }
