@@ -20,8 +20,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.model.ObjectiveStatus
-import com.example.data.model.PlayerStance
+import com.example.data.model.*
 import com.example.engine.AudioIntensityCategory
 import com.example.engine.GameState
 import com.example.engine.StealthStatus
@@ -529,7 +528,7 @@ fun TacticalHUD(
         ) {
             // Active Cover Defensive Buff Status Pill
             AnimatedVisibility(
-                visible = player.isBehindCover || player.activeCoverBuffTitle != null,
+                visible = player.isBehindCover || player.isCoverSnapped || player.activeCoverBuffTitle != null,
                 modifier = Modifier.padding(bottom = 6.dp)
             ) {
                 Surface(
@@ -538,7 +537,7 @@ fun TacticalHUD(
                     color = if (player.isCoverFlanked) LaserRed.copy(alpha = 0.25f) else NanoCyan.copy(alpha = 0.15f),
                     border = androidx.compose.foundation.BorderStroke(
                         1.dp,
-                        if (player.isCoverFlanked) LaserRed else NanoCyan
+                        if (player.isCoverFlanked) LaserRed else if (player.isCoverSnapped) NaniteGreen else NanoCyan
                     )
                 ) {
                     Row(
@@ -550,33 +549,53 @@ fun TacticalHUD(
                             Icon(
                                 imageVector = if (player.isCoverFlanked) Icons.Default.Warning else Icons.Default.Shield,
                                 contentDescription = "Cover Buff",
-                                tint = if (player.isCoverFlanked) LaserRed else NanoCyan,
+                                tint = if (player.isCoverFlanked) LaserRed else if (player.isCoverSnapped) NaniteGreen else NanoCyan,
                                 modifier = Modifier.size(15.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Column {
+                                val stateTag = when (player.movementState) {
+                                    PlayerMovementState.COVER_SNAPPED -> "[LOCKED]"
+                                    PlayerMovementState.COVER_TRAVERSING -> "[TRAVERSING]"
+                                    PlayerMovementState.COVER_PEEKING -> "[PEEKING]"
+                                    PlayerMovementState.COVER_VAULTING -> "[VAULTING]"
+                                    else -> ""
+                                }
                                 Text(
-                                    text = player.activeCoverBuffTitle ?: "COVER BRACED",
+                                    text = "${player.activeCoverBuffTitle ?: "COVER BRACED"} $stateTag".trim(),
                                     color = if (player.isCoverFlanked) LaserRed else TextPrimary,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold
                                 )
+                                val hitReductionPct = ((1.0f - player.incomingHitProbability) * 100).toInt()
+                                val subText = if (player.isCoverFlanked) {
+                                    "WARNING: EXPOSED FLANK! +45% DAMAGE"
+                                } else {
+                                    "HIT PROBABILITY: -${hitReductionPct}% EVASION"
+                                }
                                 Text(
-                                    text = player.activeCoverBuffSubtitle ?: "DEFENSIVE POSITION ACTIVE",
-                                    color = if (player.isCoverFlanked) LaserRed.copy(alpha = 0.8f) else NanoCyan,
+                                    text = subText,
+                                    color = if (player.isCoverFlanked) LaserRed.copy(alpha = 0.85f) else NaniteGreen,
                                     fontSize = 8.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
                         }
 
-                        val stanceLabel = player.stance.name
-                        Text(
-                            text = "STANCE: $stanceLabel",
-                            color = TextMuted,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "STANCE: ${player.stance.name}",
+                                color = TextMuted,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "HIT: ${(player.incomingHitProbability * 100).toInt()}%",
+                                color = if (player.incomingHitProbability < 0.4f) NaniteGreen else TextSecondary,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }
@@ -773,16 +792,42 @@ fun TacticalHUD(
                 ) {
                     // Cover / Stance Action Button
                     val isCoverActive = player.isBehindCover || player.isCoverSnapped
+                    val canVault = player.isCoverSnapped && player.coverHeight == CoverHeight.LOW
+                    val buttonColor = when {
+                        player.isCoverSnapped -> NaniteGreen.copy(alpha = 0.25f)
+                        isCoverActive -> NanoCyan.copy(alpha = 0.2f)
+                        else -> SlateCard
+                    }
+                    val borderColor = when {
+                        player.isCoverSnapped -> NaniteGreen
+                        isCoverActive -> NanoCyan
+                        else -> NanoCyan.copy(alpha = 0.4f)
+                    }
+                    val iconTint = when {
+                        player.isCoverSnapped -> NaniteGreen
+                        isCoverActive -> NanoCyan
+                        else -> TextSecondary
+                    }
+                    val labelText = when {
+                        canVault -> "VAULT"
+                        player.isCoverSnapped -> "SNAPPED"
+                        player.isBehindCover -> "COVER"
+                        player.stance == PlayerStance.STAND -> "STAND"
+                        player.stance == PlayerStance.CROUCH -> "CROUCH"
+                        player.stance == PlayerStance.PRONE -> "PRONE"
+                        else -> "COVER"
+                    }
+
                     Surface(
                         onClick = onToggleStance,
                         modifier = Modifier
                             .testTag("stance_button")
                             .size(52.dp),
                         shape = RoundedCornerShape(14.dp),
-                        color = if (isCoverActive) NanoCyan.copy(alpha = 0.2f) else SlateCard,
+                        color = buttonColor,
                         border = androidx.compose.foundation.BorderStroke(
                             if (isCoverActive) 1.5.dp else 1.dp,
-                            if (isCoverActive) NanoCyan else NanoCyan.copy(alpha = 0.4f)
+                            borderColor
                         )
                     ) {
                         Column(
@@ -791,18 +836,14 @@ fun TacticalHUD(
                             verticalArrangement = Arrangement.Center
                         ) {
                             Icon(
-                                imageVector = if (isCoverActive) Icons.Default.Shield else Icons.Default.Shield,
+                                imageVector = Icons.Default.Shield,
                                 contentDescription = "Cover",
-                                tint = if (isCoverActive) NanoCyan else TextSecondary,
+                                tint = iconTint,
                                 modifier = Modifier.size(20.dp)
                             )
                             Text(
-                                text = when (player.stance) {
-                                    PlayerStance.STAND -> "STAND"
-                                    PlayerStance.CROUCH -> "CROUCH"
-                                    PlayerStance.PRONE -> "PRONE"
-                                },
-                                color = if (isCoverActive) NanoCyan else TextMuted,
+                                text = labelText,
+                                color = if (isCoverActive) borderColor else TextMuted,
                                 fontSize = 8.sp,
                                 fontWeight = FontWeight.Bold
                             )

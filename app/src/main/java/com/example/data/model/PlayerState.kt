@@ -4,6 +4,16 @@ enum class PlayerStance {
     STAND, CROUCH, PRONE
 }
 
+enum class PlayerMovementState {
+    IDLE,              // Stationary
+    WALKING,           // Standard tactical movement
+    SPRINTING,         // High-speed run
+    COVER_SNAPPED,     // Anchored against voxel cover object
+    COVER_TRAVERSING,  // Sliding along voxel cover face
+    COVER_PEEKING,     // Leaning/aiming past cover edge or over low barrier
+    COVER_VAULTING     // Fluidly vaulting over low obstacle
+}
+
 enum class AutoAimMode {
     SMART,   // Magnetic lock-on within tactical cone
     PRECISE, // High precision lock-on to closest high threat target
@@ -31,6 +41,7 @@ data class PlayerState(
     var maxNanoShield: Float = 50f,
     var shieldRechargeDelayMs: Long = 0,
     var stance: PlayerStance = PlayerStance.STAND,
+    var movementState: PlayerMovementState = PlayerMovementState.IDLE,
     var isBehindCover: Boolean = false,
     var isCoverSnapped: Boolean = false,
     var coverSnapNormalX: Float = 0f,
@@ -43,6 +54,15 @@ data class PlayerState(
     var activeCoverBuffTitle: String? = null,
     var activeCoverBuffSubtitle: String? = null,
     var activeCoverDamageMitigation: Float = 0f,
+    var coverHitProbabilityReduction: Float = 0f, // 0.0 to 1.0 (e.g. 0.85 = 85% reduced hit probability)
+    var incomingHitProbability: Float = 0.92f,    // 0.0 to 1.0 (e.g. 0.10 = only 10% hit chance for enemies)
+    var isVaulting: Boolean = false,
+    var vaultProgress: Float = 0f,
+    var vaultStartX: Float = 0f,
+    var vaultStartY: Float = 0f,
+    var vaultTargetX: Float = 0f,
+    var vaultTargetY: Float = 0f,
+    var coverPeekFactor: Float = 0f,
     var activeCoverShieldBonus: Float = 1.0f,
     var activeCoverAccuracyBonus: Float = 1.0f,
     var isCoverFlanked: Boolean = false,
@@ -68,9 +88,17 @@ data class PlayerState(
     val activeWeapon: Weapon get() = if (activeWeaponSlot == 1) currentWeapon else sidearmWeapon
     val isAlive: Boolean get() = health > 0f
     
-    val moveSpeedMultiplier: Float get() = when (stance) {
-        PlayerStance.STAND -> 1.0f
-        PlayerStance.CROUCH -> 0.65f
-        PlayerStance.PRONE -> 0.35f
+    val moveSpeedMultiplier: Float get() = when (movementState) {
+        PlayerMovementState.SPRINTING -> 1.55f
+        PlayerMovementState.COVER_SNAPPED -> 0f
+        PlayerMovementState.COVER_TRAVERSING -> 0.60f
+        PlayerMovementState.COVER_PEEKING -> 0.30f
+        PlayerMovementState.COVER_VAULTING -> 1.25f
+        PlayerMovementState.IDLE -> 1.0f
+        PlayerMovementState.WALKING -> when (stance) {
+            PlayerStance.STAND -> 1.0f
+            PlayerStance.CROUCH -> 0.65f
+            PlayerStance.PRONE -> 0.35f
+        }
     }
 }

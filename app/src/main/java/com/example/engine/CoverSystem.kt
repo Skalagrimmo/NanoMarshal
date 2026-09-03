@@ -2,6 +2,7 @@ package com.example.engine
 
 import com.example.data.model.CoverHeight
 import com.example.data.model.Enemy
+import com.example.data.model.PlayerMovementState
 import com.example.data.model.PlayerStance
 import com.example.data.model.PlayerState
 import com.example.data.model.VoxelTile
@@ -20,6 +21,8 @@ data class VoxelCoverTypeInfo(
     val coverHeight: CoverHeight,
     val baseDamageMitigation: Float,       // Fraction of incoming projectile damage absorbed (e.g. 0.85 = 85% absorbed)
     val crouchBonusMitigation: Float,      // Extra damage absorption when crouching/prone
+    val baseHitProbabilityReduction: Float = 0.70f, // Base reduction in enemy hit probability (e.g. 0.75 = -75% hit chance)
+    val crouchHitProbabilityReduction: Float = 0.15f, // Additional reduction when crouching
     val shieldRechargeBonusMultiplier: Float, // Multiplier to active shield recharge rate (e.g. 1.5 = +50%)
     val accuracyStabilityBonus: Float,     // Aim recoil and spread stabilization bonus
     val stealthNoiseDamping: Float,        // Sound occlusion factor (e.g. 0.4 = 60% noise reduction)
@@ -38,6 +41,8 @@ data class CoverBuffEvaluation(
     val coverTile: VoxelTile?,
     val coverInfo: VoxelCoverTypeInfo?,
     val damageMitigationFraction: Float,   // e.g. 0.85 means entity takes only 15% damage
+    val hitProbabilityReduction: Float = 0f, // e.g. 0.85 means enemy hit probability is reduced by 85%
+    val effectiveHitProbability: Float = 0.92f, // e.g. 0.10 means 10% final enemy hit chance
     val shieldRechargeMultiplier: Float,   // Multiplier to shield regen
     val accuracyBonusMultiplier: Float,    // Multiplier to weapon accuracy/range
     val stealthNoiseMultiplier: Float,     // Multiplier to noise radius
@@ -294,6 +299,12 @@ class CoverSystem {
         }
 
         if (coverTile == null) {
+            val naturalEvade = when (stance) {
+                PlayerStance.CROUCH -> 0.18f // 18% evasion from crouching
+                PlayerStance.PRONE -> 0.35f  // 35% evasion from prone
+                PlayerStance.STAND -> 0.0f
+            }
+            val effHitProb = (0.92f - naturalEvade).coerceIn(0.20f, 1.0f)
             return CoverBuffEvaluation(
                 isCovered = false,
                 coverTile = null,
@@ -303,6 +314,8 @@ class CoverSystem {
                     PlayerStance.PRONE -> 0.30f  // 30% natural prone profile
                     PlayerStance.STAND -> 0.0f
                 },
+                hitProbabilityReduction = naturalEvade,
+                effectiveHitProbability = effHitProb,
                 shieldRechargeMultiplier = 1.0f,
                 accuracyBonusMultiplier = when (stance) {
                     PlayerStance.CROUCH -> 1.15f
@@ -357,9 +370,22 @@ class CoverSystem {
         }
         totalMitigation = totalMitigation.coerceIn(0.0f, 0.95f)
 
+        // Calculate hit probability reduction provided by this voxel cover object
+        var hitReduction = coverInfo.baseHitProbabilityReduction * hpRatio
+        if (stance == PlayerStance.CROUCH || stance == PlayerStance.PRONE) {
+            hitReduction += coverInfo.crouchHitProbabilityReduction
+        }
+        if (stance == PlayerStance.PRONE) {
+            hitReduction += 0.05f
+        }
+        hitReduction = hitReduction.coerceIn(0.0f, 0.95f)
+
         if (isFlanked) {
             totalMitigation = 0f // No cover mitigation if flanked
+            hitReduction = 0f   // Unprotected flank: zero evasion
         }
+
+        val effectiveHitProb = if (isFlanked) 1.0f else (0.92f * (1.0f - hitReduction)).coerceIn(0.06f, 1.0f)
 
         // Final accuracy stability and stealth noise buffs
         val finalAccuracy = if (isFlanked) 1.0f else coverInfo.accuracyStabilityBonus
@@ -368,9 +394,9 @@ class CoverSystem {
 
         val badgeTitle = if (isFlanked) "FLANKED!" else coverInfo.buffTitle
         val badgeSubtitle = if (isFlanked) {
-            "UNPROTECTED ANGLE"
+            "UNPROTECTED FLANK // 100% HIT"
         } else {
-            "-${(totalMitigation * 100).toInt()}% DMG // ${coverInfo.buffDescription}"
+            "-${(hitReduction * 100).toInt()}% HIT CHANCE // -${(totalMitigation * 100).toInt()}% DMG"
         }
 
         return CoverBuffEvaluation(
@@ -378,6 +404,8 @@ class CoverSystem {
             coverTile = coverTile,
             coverInfo = coverInfo,
             damageMitigationFraction = totalMitigation,
+            hitProbabilityReduction = hitReduction,
+            effectiveHitProbability = effectiveHitProb,
             shieldRechargeMultiplier = finalShieldRecharge,
             accuracyBonusMultiplier = finalAccuracy,
             stealthNoiseMultiplier = finalNoiseMult,
@@ -387,6 +415,47 @@ class CoverSystem {
             buffBadgeTitle = badgeTitle,
             buffBadgeSubtitle = badgeSubtitle
         )
+    }
+
+    /**
+     * Calculates the probability (0.0 to 1.0) of an incoming bullet or attack hitting the target,
+     * taking into account target stance, state-based movement (open sprint/walk vs snapped to voxel cover),
+     * cover height, voxel material integrity, and angle of attack.
+     */
+    fun calculateHitProbability(
+        target: PlayerState,
+        threatX: Float?,
+        threatY: Float?,
+        coverEval: CoverBuffEvaluation
+    ): Float {
+        var baseHit = when (target.stance) {
+            PlayerStance.STAND -> 0.92f
+            PlayerStance.CROUCH -> 0.74f
+            PlayerStance.PRONE -> 0.52f
+        }
+
+        if (target.movementState == PlayerMovementState.SPRINTING) {
+            baseHit -= 0.18f
+        }
+
+        if (!coverEval.isCovered || coverEval.isFlanked || coverEval.coverTile == null) {
+            return if (coverEval.isFlanked) 1.0f else baseHit.coerceIn(0.20f, 1.0f)
+        }
+
+        // Apply cover reduction
+        val coverReduction = coverEval.hitProbabilityReduction
+
+        // Snapped state bonus: hugging cover tightly gives maximum defensive occlusion
+        val snapBonus = when (target.movementState) {
+            PlayerMovementState.COVER_SNAPPED -> 0.10f
+            PlayerMovementState.COVER_TRAVERSING -> 0.06f
+            PlayerMovementState.COVER_PEEKING -> -0.15f // slightly higher exposure while aiming out
+            PlayerMovementState.COVER_VAULTING -> -0.10f
+            else -> 0.0f
+        }
+
+        val totalReduction = (coverReduction + snapBonus).coerceIn(0.0f, 0.94f)
+        return (baseHit * (1.0f - totalReduction)).coerceIn(0.06f, 1.0f)
     }
 
     /**

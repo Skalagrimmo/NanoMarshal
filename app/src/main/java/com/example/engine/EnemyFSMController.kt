@@ -7,8 +7,10 @@ import com.example.data.model.Enemy
 import com.example.data.model.EnemyType
 import com.example.data.model.Particle
 import com.example.data.model.ParticleType
+import com.example.data.model.PlayerMovementState
 import com.example.data.model.PlayerState
 import com.example.data.model.VoxelTile
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -26,7 +28,7 @@ enum class ProximityCategory {
 }
 
 /**
- * Snapshot of enemy perception evaluated per tick.
+ * Snapshot of enemy perception evaluated per tick, including player cover state analysis.
  */
 data class PerceptionSnapshot(
     val distToPlayer: Float,
@@ -36,6 +38,13 @@ data class PerceptionSnapshot(
     val canSeePlayer: Boolean,
     val canHearPlayer: Boolean,
     val playerIsBehindCover: Boolean,
+    val isPlayerCoverSnapped: Boolean,
+    val playerMovementState: PlayerMovementState,
+    val isPlayerVaulting: Boolean,
+    val isPlayerTraversing: Boolean,
+    val isPlayerPeeking: Boolean,
+    val isPlayerCoverFlanked: Boolean,
+    val angleDiffFromCoverDeg: Float,
     val healthRatio: Float,
     val proximity: ProximityCategory,
     val bestCoverCandidate: CoverSpotCandidate?
@@ -86,6 +95,31 @@ class EnemyFSMController(
 
         val healthRatio = (enemy.health / enemy.maxHealth).coerceIn(0f, 1f)
 
+        // Player Cover State & Flank Angle Calculation
+        val isSnapped = player.isCoverSnapped
+        val isBehind = player.isBehindCover
+        val mState = player.movementState
+
+        val coverThreatAngle: Float = when {
+            isSnapped && (player.coverSnapNormalX != 0f || player.coverSnapNormalY != 0f) -> {
+                atan2(player.coverSnapNormalY, player.coverSnapNormalX)
+            }
+            player.coverTileX != null && player.coverTileY != null -> {
+                val cWorldX = (player.coverTileX!! + 0.5f) * terrain.tileSize
+                val cWorldY = (player.coverTileY!! + 0.5f) * terrain.tileSize
+                atan2(player.y - cWorldY, player.x - cWorldX)
+            }
+            else -> player.facingAngle
+        }
+
+        val angleFromPlayerToEnemy = atan2(enemy.y - player.y, enemy.x - player.x)
+        var diffThreat = abs(angleFromPlayerToEnemy - coverThreatAngle)
+        if (diffThreat > PI) diffThreat = (2 * PI - diffThreat).toFloat()
+        val angleDiffDeg = Math.toDegrees(diffThreat.toDouble()).toFloat()
+
+        // Player cover is flanked if enemy angle exceeds 68 degrees from cover face
+        val isFlanked = (isSnapped || isBehind) && angleDiffDeg > 68f
+
         return PerceptionSnapshot(
             distToPlayer = distToPlayer,
             angleToPlayer = angleToPlayer,
@@ -93,7 +127,14 @@ class EnemyFSMController(
             hasLOS = hasLOS,
             canSeePlayer = canSeePlayer,
             canHearPlayer = canHearPlayer,
-            playerIsBehindCover = player.isBehindCover,
+            playerIsBehindCover = isBehind,
+            isPlayerCoverSnapped = isSnapped,
+            playerMovementState = mState,
+            isPlayerVaulting = mState == PlayerMovementState.COVER_VAULTING,
+            isPlayerTraversing = mState == PlayerMovementState.COVER_TRAVERSING,
+            isPlayerPeeking = mState == PlayerMovementState.COVER_PEEKING,
+            isPlayerCoverFlanked = isFlanked,
+            angleDiffFromCoverDeg = angleDiffDeg,
             healthRatio = healthRatio,
             proximity = proximity,
             bestCoverCandidate = bestCover
@@ -129,7 +170,11 @@ class EnemyFSMController(
                         // High visibility -> Seek Cover if low HP, else Flank or Engage
                         if (perception.healthRatio < 0.6f && perception.bestCoverCandidate != null) {
                             AIState.SEEKING_COVER
-                        } else if (perception.playerIsBehindCover || enemy.type == EnemyType.FLANKER) {
+                        } else if (perception.isPlayerVaulting || perception.isPlayerTraversing) {
+                            AIState.FLANKING
+                        } else if ((perception.isPlayerCoverSnapped || perception.playerIsBehindCover) && !perception.isPlayerCoverFlanked) {
+                            AIState.FLANKING
+                        } else if (enemy.type == EnemyType.FLANKER) {
                             AIState.FLANKING
                         } else {
                             AIState.ENGAGED
@@ -143,7 +188,11 @@ class EnemyFSMController(
             AIState.SUSPICIOUS, AIState.INVESTIGATING -> {
                 when {
                     perception.canSeePlayer -> {
-                        if (perception.playerIsBehindCover) AIState.FLANKING else AIState.ENGAGED
+                        if ((perception.isPlayerCoverSnapped || perception.playerIsBehindCover) && !perception.isPlayerCoverFlanked) {
+                            AIState.FLANKING
+                        } else {
+                            AIState.ENGAGED
+                        }
                     }
                     enemy.alertLevel < 5f -> AIState.PATROL
                     else -> AIState.INVESTIGATING
@@ -156,8 +205,10 @@ class EnemyFSMController(
                     perception.healthRatio < 0.35f -> {
                         if (perception.bestCoverCandidate != null) AIState.SEEKING_COVER else AIState.RETREAT
                     }
-                    // Player behind cover -> Flank or Suppress
-                    perception.playerIsBehindCover -> {
+                    // Player Vaulting -> Transition to Flank Intercept
+                    perception.isPlayerVaulting -> AIState.FLANKING
+                    // Player behind cover and NOT yet flanked -> Flank or Suppress
+                    (perception.isPlayerCoverSnapped || perception.playerIsBehindCover) && !perception.isPlayerCoverFlanked -> {
                         if (enemy.type == EnemyType.SHIELD_ENFORCER || Random.nextFloat() < 0.35f) {
                             AIState.SUPPRESSING
                         } else {
@@ -188,17 +239,20 @@ class EnemyFSMController(
                 when {
                     // Critical Health -> Seek Cover
                     perception.healthRatio < 0.25f && perception.bestCoverCandidate != null -> AIState.SEEKING_COVER
+                    // Flank established (player cover unshielded from this angle and in LOS) -> Strike in Engaged
+                    perception.isPlayerCoverFlanked && perception.canSeePlayer -> AIState.ENGAGED
                     // Player left cover and is visible at close range -> Engaged
-                    !perception.playerIsBehindCover && perception.canSeePlayer && perception.proximity == ProximityCategory.CLOSE -> AIState.ENGAGED
+                    !perception.playerIsBehindCover && !perception.isPlayerCoverSnapped && perception.canSeePlayer -> AIState.ENGAGED
                     else -> AIState.FLANKING
                 }
             }
 
             AIState.SUPPRESSING -> {
                 when {
-                    // Target cover destroyed or player exposed -> Transition to Flanking or Engaged
-                    !perception.playerIsBehindCover -> AIState.ENGAGED
-                    Random.nextFloat() < 0.015f -> AIState.FLANKING
+                    // Target cover destroyed or player left cover -> Transition to Flanking or Engaged
+                    !perception.playerIsBehindCover && !perception.isPlayerCoverSnapped -> AIState.ENGAGED
+                    // Flank opening created or suppression cycle ended -> Flank
+                    Random.nextFloat() < 0.018f -> AIState.FLANKING
                     else -> AIState.SUPPRESSING
                 }
             }

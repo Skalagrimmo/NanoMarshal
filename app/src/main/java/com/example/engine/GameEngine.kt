@@ -389,21 +389,99 @@ class GameEngine(
 
     fun handlePlayerMoveInput(dx: Float, dy: Float) {
         val curr = _gameState.value.player
-        val speed = 180f * curr.moveSpeedMultiplier
-        val vx = dx * speed
-        val vy = dy * speed
+        if (curr.isVaulting) return // Autonomous movement during vaulting
 
-        val newFacing = if (abs(dx) > 0.1f || abs(dy) > 0.1f) atan2(dy, dx) else curr.facingAngle
-        val noise = if (abs(dx) > 0.1f || abs(dy) > 0.1f) {
-            when (curr.stance) {
-                PlayerStance.STAND -> 120f
-                PlayerStance.CROUCH -> 40f
-                PlayerStance.PRONE -> 15f
+        val inputMag = sqrt(dx * dx + dy * dy)
+        val isInputActive = inputMag > 0.08f
+
+        // Cover-Locked Movement Handling
+        if (curr.isCoverSnapped) {
+            val snapNx = curr.coverSnapNormalX
+            val snapNy = curr.coverSnapNormalY
+            val tangentX = -snapNy
+            val tangentY = snapNx
+
+            // Projection onto normal vector (pulling away from wall vs pushing into it)
+            val normalDot = dx * snapNx + dy * snapNy
+            // Projection onto tangent vector (sliding along wall face)
+            val tangentDot = dx * tangentX + dy * tangentY
+
+            // If pulling strongly away from cover, detach and return to free movement
+            if (normalDot > 0.52f) {
+                val nextState = if (inputMag > 0.82f) PlayerMovementState.SPRINTING else PlayerMovementState.WALKING
+                val speed = if (nextState == PlayerMovementState.SPRINTING) 265f else (180f * curr.moveSpeedMultiplier)
+                _gameState.value = _gameState.value.copy(
+                    player = curr.copy(
+                        isCoverSnapped = false,
+                        movementState = nextState,
+                        vx = dx * speed,
+                        vy = dy * speed,
+                        facingAngle = atan2(dy, dx),
+                        stealthNoiseRadius = if (nextState == PlayerMovementState.SPRINTING) 160f else 90f
+                    )
+                )
+                return
             }
-        } else 0f
+
+            // If traversing/sliding along the cover wall face
+            if (abs(tangentDot) > 0.15f) {
+                val traverseSpeed = 120f
+                val vx = tangentX * (tangentDot * traverseSpeed)
+                val vy = tangentY * (tangentDot * traverseSpeed)
+                _gameState.value = _gameState.value.copy(
+                    player = curr.copy(
+                        movementState = PlayerMovementState.COVER_TRAVERSING,
+                        vx = vx,
+                        vy = vy,
+                        stealthNoiseRadius = 25f
+                    )
+                )
+                return
+            }
+
+            // Stationary behind cover: Check if aiming outward (Peeking) or tucked (Snapped)
+            val isPeeking = curr.isFiring || (curr.aimAngle != 0f && abs(normalizeAngle(curr.aimAngle - atan2(snapNy, snapNx))) > Math.toRadians(55.0))
+            _gameState.value = _gameState.value.copy(
+                player = curr.copy(
+                    movementState = if (isPeeking) PlayerMovementState.COVER_PEEKING else PlayerMovementState.COVER_SNAPPED,
+                    vx = 0f,
+                    vy = 0f,
+                    stealthNoiseRadius = 0f
+                )
+            )
+            return
+        }
+
+        // Free Tactical Movement State Machine
+        val nextState = when {
+            !isInputActive -> PlayerMovementState.IDLE
+            inputMag > 0.82f -> PlayerMovementState.SPRINTING
+            else -> PlayerMovementState.WALKING
+        }
+
+        val baseSpeed = when (nextState) {
+            PlayerMovementState.SPRINTING -> 265f
+            PlayerMovementState.WALKING -> 180f * curr.moveSpeedMultiplier
+            else -> 0f
+        }
+
+        val vx = if (isInputActive) (dx / inputMag.coerceAtLeast(1f)) * baseSpeed * inputMag.coerceAtMost(1f) else 0f
+        val vy = if (isInputActive) (dy / inputMag.coerceAtLeast(1f)) * baseSpeed * inputMag.coerceAtMost(1f) else 0f
+
+        val newFacing = if (isInputActive) atan2(dy, dx) else curr.facingAngle
+        val noise = when (nextState) {
+            PlayerMovementState.SPRINTING -> 180f
+            PlayerMovementState.WALKING -> when (curr.stance) {
+                PlayerStance.STAND -> 110f
+                PlayerStance.CROUCH -> 35f
+                PlayerStance.PRONE -> 12f
+            }
+            else -> 0f
+        }
 
         _gameState.value = _gameState.value.copy(
             player = curr.copy(
+                movementState = nextState,
                 vx = vx,
                 vy = vy,
                 facingAngle = newFacing,
@@ -709,7 +787,11 @@ class GameEngine(
                     y = snappedY,
                     facingAngle = angleToTile, // Face towards cover
                     stance = if (bestTile.coverHeight == CoverHeight.HIGH) PlayerStance.STAND else PlayerStance.CROUCH,
+                    movementState = PlayerMovementState.COVER_SNAPPED,
+                    isCoverSnapped = true,
                     isBehindCover = true,
+                    coverSnapNormalX = -cos(angleToTile),
+                    coverSnapNormalY = -sin(angleToTile),
                     coverTileX = bestTile.gridX,
                     coverTileY = bestTile.gridY,
                     coverHeight = bestTile.coverHeight
@@ -732,10 +814,69 @@ class GameEngine(
         return false
     }
 
+    fun triggerCoverVault(): Boolean {
+        val curr = _gameState.value.player
+        if (curr.isVaulting) return false
+
+        val tileSize = terrain.tileSize
+        val gx = (curr.x / tileSize).toInt().coerceIn(0, terrain.width - 1)
+        val gy = (curr.y / tileSize).toInt().coerceIn(0, terrain.height - 1)
+
+        val checkNx = if (curr.isCoverSnapped) (-curr.coverSnapNormalX).roundToInt() else cos(curr.facingAngle).roundToInt()
+        val checkNy = if (curr.isCoverSnapped) (-curr.coverSnapNormalY).roundToInt() else sin(curr.facingAngle).roundToInt()
+
+        val targetGx = gx + checkNx
+        val targetGy = gy + checkNy
+        val tile = terrain.tiles.getOrNull(targetGx)?.getOrNull(targetGy)
+
+        if (tile != null && tile.coverHeight == CoverHeight.LOW) {
+            val destGx = targetGx + checkNx
+            val destGy = targetGy + checkNy
+            val destTile = terrain.tiles.getOrNull(destGx)?.getOrNull(destGy)
+            if (destTile != null && destTile.isWalkable) {
+                val destX = (destGx + 0.5f) * tileSize
+                val destY = (destGy + 0.5f) * tileSize
+                _gameState.value = _gameState.value.copy(
+                    player = curr.copy(
+                        isVaulting = true,
+                        vaultProgress = 0f,
+                        vaultStartX = curr.x,
+                        vaultStartY = curr.y,
+                        vaultTargetX = destX,
+                        vaultTargetY = destY,
+                        movementState = PlayerMovementState.COVER_VAULTING,
+                        isCoverSnapped = false,
+                        isBehindCover = false
+                    )
+                )
+                SoundFX.play(SoundFX.SoundType.RELOAD)
+                return true
+            }
+        }
+        return false
+    }
+
     fun toggleStance() {
         val p = _gameState.value.player
-        // Try snapping to cover first if standing or crouching near voxel obstacle
-        if (!p.isBehindCover && snapPlayerToCover()) {
+
+        // If player is already cover-snapped against low cover, tapping cover/stance can trigger vault
+        if (p.isCoverSnapped && p.coverHeight == CoverHeight.LOW && triggerCoverVault()) {
+            return
+        }
+
+        // Try snapping to cover first if near voxel obstacle
+        if (!p.isCoverSnapped && snapPlayerToCover()) {
+            return
+        }
+
+        // If snapped and cannot vault, toggle crouch/stand while maintaining cover lock
+        if (p.isCoverSnapped) {
+            val nextStance = if (p.stance == PlayerStance.STAND) PlayerStance.CROUCH else PlayerStance.STAND
+            _gameState.value = _gameState.value.copy(
+                player = p.copy(
+                    stance = nextStance
+                )
+            )
             return
         }
 
@@ -883,15 +1024,44 @@ class GameEngine(
             }
         }
 
-        // Apply Movement
-        val nextX = player.x + player.vx * deltaSec
-        val nextY = player.y + player.vy * deltaSec
+        // Handle Vaulting transition across low cover obstacles
+        if (player.isVaulting) {
+            player.vaultProgress += deltaSec * 3.5f
+            if (player.vaultProgress >= 1.0f) {
+                player.isVaulting = false
+                player.vaultProgress = 0f
+                player.x = player.vaultTargetX
+                player.y = player.vaultTargetY
+                player.movementState = PlayerMovementState.IDLE
+                player.vx = 0f
+                player.vy = 0f
+                particles.add(
+                    Particle(
+                        x = player.x,
+                        y = player.y,
+                        vx = 0f,
+                        vy = -12f,
+                        color = Color(0xFF00F0FF),
+                        size = 11f,
+                        type = ParticleType.HIT_NUMBER,
+                        text = "VAULT COMPLETE"
+                    )
+                )
+            } else {
+                player.x = player.vaultStartX + (player.vaultTargetX - player.vaultStartX) * player.vaultProgress
+                player.y = player.vaultStartY + (player.vaultTargetY - player.vaultStartY) * player.vaultProgress
+            }
+        } else {
+            // Apply Movement
+            val nextX = player.x + player.vx * deltaSec
+            val nextY = player.y + player.vy * deltaSec
 
-        // Check Voxel Collisions
-        val currentTile = terrain.getTileAtWorld(nextX, nextY)
-        if (currentTile == null || currentTile.isWalkable) {
-            player.x = nextX.coerceIn(terrain.tileSize, (terrain.width - 1) * terrain.tileSize)
-            player.y = nextY.coerceIn(terrain.tileSize, (terrain.height - 1) * terrain.tileSize)
+            // Check Voxel Collisions
+            val currentTile = terrain.getTileAtWorld(nextX, nextY)
+            if (currentTile == null || currentTile.isWalkable) {
+                player.x = nextX.coerceIn(terrain.tileSize, (terrain.width - 1) * terrain.tileSize)
+                player.y = nextY.coerceIn(terrain.tileSize, (terrain.height - 1) * terrain.tileSize)
+            }
         }
 
         // Process Automatic Cover Snap system against adjacent voxel obstacles
@@ -912,6 +1082,16 @@ class GameEngine(
             coverTileX = player.coverTileX,
             coverTileY = player.coverTileY
         )
+
+        // Real-time calculation of incoming enemy hit probability based on movement state & voxel cover
+        val hitProbability = coverSystem.calculateHitProbability(
+            target = player,
+            threatX = nearestThreat?.x,
+            threatY = nearestThreat?.y,
+            coverEval = coverEval
+        )
+        player.incomingHitProbability = hitProbability
+        player.coverHitProbabilityReduction = (1.0f - hitProbability).coerceIn(0f, 1f)
 
         player.activeCoverType = coverEval.coverTile?.type
         player.activeCoverBuffTitle = if (coverEval.isCovered) coverEval.buffBadgeTitle else null
@@ -1292,6 +1472,7 @@ class GameEngine(
                 if (player.isCoverSnapped) {
                     player.isCoverSnapped = false
                     player.isBehindCover = false
+                    player.movementState = PlayerMovementState.WALKING
                     player.coverTileX = null
                     player.coverTileY = null
                 }
@@ -1305,8 +1486,16 @@ class GameEngine(
                 player.coverSnapNormalX = snapNx
                 player.coverSnapNormalY = snapNy
 
-                if (snapNx != 0f) player.x = targetSnapX
-                if (snapNy != 0f) player.y = targetSnapY
+                if (player.movementState == PlayerMovementState.COVER_TRAVERSING) {
+                    // Lock perpendicular axis to maintain flush contact while allowing tangent slide
+                    if (snapNx != 0f) player.x = targetSnapX
+                    if (snapNy != 0f) player.y = targetSnapY
+                } else {
+                    if (snapNx != 0f) player.x = targetSnapX
+                    if (snapNy != 0f) player.y = targetSnapY
+                    val isPeeking = player.isFiring || (player.aimAngle != 0f && abs(normalizeAngle(player.aimAngle - atan2(snapNy, snapNx))) > Math.toRadians(55.0))
+                    player.movementState = if (isPeeking) PlayerMovementState.COVER_PEEKING else PlayerMovementState.COVER_SNAPPED
+                }
 
                 if (nearestObstacleTile.coverHeight == CoverHeight.LOW) {
                     player.stance = PlayerStance.CROUCH
@@ -1353,6 +1542,11 @@ class GameEngine(
             if (player.isCoverSnapped) {
                 player.isCoverSnapped = false
                 player.isBehindCover = false
+                if (player.movementState == PlayerMovementState.COVER_SNAPPED ||
+                    player.movementState == PlayerMovementState.COVER_TRAVERSING ||
+                    player.movementState == PlayerMovementState.COVER_PEEKING) {
+                    player.movementState = PlayerMovementState.IDLE
+                }
                 player.coverTileX = null
                 player.coverTileY = null
             } else {

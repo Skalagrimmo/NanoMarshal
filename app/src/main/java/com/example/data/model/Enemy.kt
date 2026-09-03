@@ -8,6 +8,21 @@ enum class AIState {
     PATROL, SUSPICIOUS, INVESTIGATING, SEEKING_COVER, ENGAGED, FLANKING, SUPPRESSING, STUNNED, RETREAT, DEAD
 }
 
+enum class FlankDirection {
+    NONE, LEFT, RIGHT, BLIND_REAR, CUT_OFF
+}
+
+enum class FlankManeuverType {
+    NONE,
+    WIDE_ARC_FLANK,
+    BLIND_SIDE_FLANK,
+    CUT_OFF_CORNER,
+    INTERCEPT_VAULT,
+    SUPPRESS_AND_CHIP,
+    TIGHT_COVER_FLANK,
+    ENCIRCLE
+}
+
 data class Enemy(
     val id: String,
     val name: String,
@@ -42,6 +57,11 @@ data class Enemy(
     var activeCoverDamageMitigation: Float = 0f,
     var isCoverFlanked: Boolean = false,
     var isFlankingPlayer: Boolean = false,
+    var flankDirection: FlankDirection = FlankDirection.NONE,
+    var flankManeuverType: FlankManeuverType = FlankManeuverType.NONE,
+    var tacticalManeuverLabel: String? = null,
+    var suppressionTargetGx: Int? = null,
+    var suppressionTargetGy: Int? = null,
     var activePath: List<Pair<Float, Float>> = emptyList(),
     var activePathIndex: Int = 0,
     var pathUpdateTimerMs: Long = 0,

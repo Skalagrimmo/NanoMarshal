@@ -5,11 +5,16 @@ import com.example.data.model.AIState
 import com.example.data.model.CoverHeight
 import com.example.data.model.Enemy
 import com.example.data.model.EnemyType
+import com.example.data.model.FlankDirection
+import com.example.data.model.FlankManeuverType
 import com.example.data.model.Particle
 import com.example.data.model.ParticleType
 import com.example.data.model.PlayerState
 import com.example.data.model.VoxelTile
 import com.example.data.model.VoxelType
+import com.example.engine.behavior.BTContext
+import com.example.engine.behavior.BTNode
+import com.example.engine.behavior.EnemyBehaviorTreeBuilder
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -45,20 +50,22 @@ data class EnemyAIActions(
 )
 
 /**
- * EnemyAI manages tactical AI state machines for patrolling, cover-seeking, flanking,
+ * EnemyAI manages tactical AI state machines and Behavior Trees for patrolling, cover-seeking, flanking,
  * suppressing fire, and attacking behavior.
  *
  * Utilizes [VoxelWorldManager] and [VoxelTerrain] to:
  * 1. Raycast line-of-sight (LOS) through the 3D voxel grid to detect obscured targets.
  * 2. Search and rank destructible voxel cover spots based on material durability, height, and threat vectors.
- * 3. Drive AI state transitions (PATROL, SUSPICIOUS, SEEKING_COVER, ENGAGED, FLANKING, SUPPRESSING, RETREAT).
+ * 3. Drive Behavior Trees and AI state transitions (PATROL, SUSPICIOUS, SEEKING_COVER, ENGAGED, FLANKING, SUPPRESSING, RETREAT).
  * 4. Coordinate tactical pathfinding, cover snapping, and weapon fire accuracy.
  */
 class EnemyAI(
     val worldManager: VoxelWorldManager,
-    val terrain: VoxelTerrain
+    val terrain: VoxelTerrain,
+    val coverSystem: CoverSystem = CoverSystem()
 ) {
     val fsmController = EnemyFSMController(worldManager, terrain)
+    private val behaviorTrees = mutableMapOf<EnemyType, BTNode>()
 
     /**
      * Checks if there is an unobstructed 3D line-of-sight between two world coordinates
@@ -243,66 +250,28 @@ class EnemyAI(
                 e.lastKnownPlayerY = player.y
             }
 
-            // Finite State Machine Transition Evaluation
-            val nextState = fsmController.evaluateNextState(e, perception, deltaSec)
-            if (nextState != e.state) {
-                e.state = nextState
-                e.pathUpdateTimerMs = 0 // Reset path timer on FSM state change
-
-                // If entering SEEKING_COVER, lock onto best cover candidate
-                if (nextState == AIState.SEEKING_COVER && bestCover != null) {
-                    e.targetCoverX = bestCover.gridX
-                    e.targetCoverY = bestCover.gridY
-                }
+            // Execute specialized Behavior Tree for current archetype (cover state detection & flank maneuvers)
+            val tree = behaviorTrees.getOrPut(e.type) {
+                EnemyBehaviorTreeBuilder.buildTreeFor(e.type)
             }
-
-            val egx = (e.x / terrain.tileSize).toInt()
-            val egy = (e.y / terrain.tileSize).toInt()
-
-            // AI State Machine Behavior Execution
-            when (e.state) {
-                AIState.PATROL -> {
-                    updatePatrolState(e, deltaSec)
-                }
-
-                AIState.SUSPICIOUS, AIState.INVESTIGATING -> {
-                    updateInvestigateState(e, egx, egy, player, deltaSec)
-                }
-
-                AIState.ENGAGED -> {
-                    e.facingAngle = angleToPlayer
-
-                    // Weapon Fire
-                    if (perception.canSeePlayer && now - e.shootCooldownMs > getAttackCooldownMs(e.type)) {
-                        e.shootCooldownMs = now
-                        val bullet = createEnemyBullet(e, angleToPlayer, now)
-                        bullets.add(bullet)
-                        spawnedBullets.add(bullet)
-                        soundList.add("laser_shot")
-                        muzzleFlashes.add(Pair(e.x, e.y))
-                    }
-                }
-
-                AIState.FLANKING -> {
-                    updateFlankingState(e, egx, egy, player, angleToPlayer, bullets, spawnedBullets, soundList, muzzleFlashes, now, deltaSec)
-                }
-
-                AIState.SUPPRESSING -> {
-                    updateSuppressingState(e, player, bullets, spawnedBullets, soundList, muzzleFlashes, now, deltaSec)
-                }
-
-                AIState.SEEKING_COVER -> {
-                    updateSeekingCoverState(e, egx, egy, player, deltaSec)
-                }
-
-                AIState.RETREAT -> {
-                    updateRetreatState(e, egx, egy, player, deltaSec)
-                }
-
-                AIState.STUNNED, AIState.DEAD -> {
-                    // Inactive
-                }
-            }
+            val btCtx = BTContext(
+                enemy = e,
+                player = player,
+                allEnemies = enemies,
+                terrain = terrain,
+                worldManager = worldManager,
+                coverSystem = coverSystem,
+                bullets = bullets,
+                spawnedBullets = spawnedBullets,
+                particles = particles,
+                soundList = soundList,
+                muzzleFlashes = muzzleFlashes,
+                now = now,
+                deltaSec = deltaSec,
+                perception = perception,
+                bestCoverSpot = bestCover
+            )
+            tree.tick(btCtx)
         }
 
         return EnemyAIActions(
@@ -373,15 +342,31 @@ class EnemyAI(
         deltaSec: Float
     ) {
         e.pathUpdateTimerMs += (deltaSec * 1000).toLong()
-        if (e.pathUpdateTimerMs > 500 || e.activePath.isEmpty() || e.activePathIndex >= e.activePath.size) {
+        if (e.pathUpdateTimerMs > 450 || e.activePath.isEmpty() || e.activePathIndex >= e.activePath.size) {
             e.pathUpdateTimerMs = 0
-            val flankTarget = VoxelPathfinder.calculateFlankTarget(terrain, e.x, e.y, player)
+            val tacticalFlank = VoxelPathfinder.calculateTacticalFlankTarget(
+                terrain = terrain,
+                enemy = e,
+                player = player
+            )
+            e.flankDirection = tacticalFlank.direction
+            e.flankManeuverType = tacticalFlank.maneuverType
+            e.tacticalManeuverLabel = when (tacticalFlank.maneuverType) {
+                FlankManeuverType.INTERCEPT_VAULT -> "VAULT-INTERCEPT"
+                FlankManeuverType.CUT_OFF_CORNER -> "CUT-OFF"
+                FlankManeuverType.BLIND_SIDE_FLANK -> "BLIND-AMBUSH"
+                FlankManeuverType.WIDE_ARC_FLANK -> if (tacticalFlank.direction == FlankDirection.LEFT) "FLANK-L" else "FLANK-R"
+                FlankManeuverType.TIGHT_COVER_FLANK -> if (tacticalFlank.direction == FlankDirection.LEFT) "FLANK-L" else "FLANK-R"
+                FlankManeuverType.SUPPRESS_AND_CHIP -> "PIN/SUPPRESS"
+                FlankManeuverType.ENCIRCLE -> "ENCIRCLE"
+                FlankManeuverType.NONE -> "FLANK"
+            }
             e.activePath = VoxelPathfinder.findPath(
                 terrain = terrain,
                 startGx = egx,
                 startGy = egy,
-                targetGx = flankTarget.first,
-                targetGy = flankTarget.second,
+                targetGx = tacticalFlank.targetGx,
+                targetGy = tacticalFlank.targetGy,
                 isFlanking = true,
                 playerState = player
             )
@@ -400,7 +385,7 @@ class EnemyAI(
             muzzleFlashes.add(Pair(e.x, e.y))
         }
 
-        if (!player.isBehindCover && !hasMorePath) {
+        if (!player.isBehindCover && !player.isCoverSnapped && !hasMorePath) {
             e.state = AIState.ENGAGED
         }
     }

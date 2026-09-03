@@ -621,10 +621,6 @@ class ProjectileManager(
                 if (!bullet.isPlayerBullet && player.isAlive) {
                     val distToPlayerSq = (nextX - player.x) * (nextX - player.x) + (nextY - player.y) * (nextY - player.y)
                     if (distToPlayerSq <= 22f * 22f) {
-                        var dmg = bullet.damage
-                        var wasCoverMitigated = false
-                        var isFlanked = false
-
                         val coverEval = coverSystem.evaluateCoverBuff(
                             entityX = player.x,
                             entityY = player.y,
@@ -636,6 +632,65 @@ class ProjectileManager(
                             coverTileX = player.coverTileX,
                             coverTileY = player.coverTileY
                         )
+
+                        // Calculate state-based hit probability (snapping to voxel cover drastically reduces hit probability)
+                        val hitProb = coverSystem.calculateHitProbability(
+                            target = player,
+                            threatX = bullet.x - bullet.vx,
+                            threatY = bullet.y - bullet.vy,
+                            coverEval = coverEval
+                        )
+                        val hitRoll = kotlin.random.Random.nextFloat()
+                        val didHit = hitRoll <= hitProb
+
+                        if (!didHit) {
+                            // Shot missed or was deflected by voxel cover!
+                            if (coverEval.isCovered && coverEval.coverTile != null) {
+                                val cx = coverEval.coverTile.gridX
+                                val cy = coverEval.coverTile.gridY
+                                val bAngle = atan2(bullet.vy, bullet.vx)
+                                terrain.applyDamageToTile(cx, cy, bullet.damage * 0.4f, bAngle)
+                            }
+
+                            val pctReduction = ((1.0f - hitProb) * 100).toInt()
+                            val evadeLabel = if (player.isCoverSnapped) "EVADED (-$pctReduction%)" else "MISSED (-$pctReduction%)"
+                            spawnedParticles.add(
+                                Particle(
+                                    x = player.x + (kotlin.random.Random.nextFloat() * 16f - 8f),
+                                    y = player.y - 18f,
+                                    vx = 0f,
+                                    vy = -24f,
+                                    color = Color(0xFF00F0FF),
+                                    size = 13f,
+                                    life = 0.85f,
+                                    maxLife = 0.85f,
+                                    type = ParticleType.HIT_NUMBER,
+                                    text = evadeLabel
+                                )
+                            )
+                            for (i in 0..4) {
+                                spawnedParticles.add(
+                                    Particle(
+                                        x = player.x + (kotlin.random.Random.nextFloat() * 12f - 6f),
+                                        y = player.y + (kotlin.random.Random.nextFloat() * 12f - 6f),
+                                        vx = -bullet.vx * 0.15f + (kotlin.random.Random.nextFloat() * 40f - 20f),
+                                        vy = -bullet.vy * 0.15f + (kotlin.random.Random.nextFloat() * 40f - 20f),
+                                        color = Color(0xFF00F0FF),
+                                        size = 3.5f,
+                                        life = 0.35f,
+                                        maxLife = 0.35f,
+                                        type = ParticleType.PLASMA_SPARK
+                                    )
+                                )
+                            }
+                            SoundFX.play(SoundFX.SoundType.HIT_SHIELD)
+                            bulletTerminated = true
+                            break
+                        }
+
+                        var dmg = bullet.damage
+                        var wasCoverMitigated = false
+                        var isFlanked = false
 
                         if (coverEval.isCovered && coverEval.coverTile != null) {
                             val cx = coverEval.coverTile.gridX

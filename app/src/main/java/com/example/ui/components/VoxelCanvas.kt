@@ -34,6 +34,7 @@ import kotlin.random.Random
 
 private val reusableVisionConePath = Path()
 private val reusableWaypointArrowPath = Path()
+private val AmberAccent = Color(0xFFF59E0B)
 
 @Composable
 fun VoxelCanvas(
@@ -333,9 +334,9 @@ fun VoxelCanvas(
                         size = Size(36f * hpPct, 5f)
                     )
 
-                    // AI State Tag & Alert
-                    if (enemy.state != AIState.PATROL) {
-                        val stateTag = when (enemy.state) {
+                    // AI State Tag & Tactical Flank Maneuver Label
+                    if (enemy.state != AIState.PATROL || enemy.tacticalManeuverLabel != null) {
+                        val stateTag = enemy.tacticalManeuverLabel ?: when (enemy.state) {
                             AIState.FLANKING -> "FLANK"
                             AIState.SEEKING_COVER -> "COVER"
                             AIState.ENGAGED -> "ENGAGE"
@@ -355,25 +356,26 @@ fun VoxelCanvas(
                         drawSafeText(
                             textMeasurer = textMeasurer,
                             text = "[$stateTag]",
-                            style = TextStyle(color = alertColor, fontSize = 11.sp, fontWeight = FontWeight.Bold),
-                            topLeft = Offset(enemy.x - 22f, enemy.y - 42f)
+                            style = TextStyle(color = alertColor, fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                            topLeft = Offset(enemy.x - 28f, enemy.y - 42f)
                         )
                     }
 
-                    // Render active tactical navigation path waypoints if tactical overlay enabled or flanking
-                    if (gameState.isTacticalGridOverlayEnabled && enemy.activePath.isNotEmpty()) {
+                    // Render active tactical navigation path waypoints if tactical overlay enabled or during flanking maneuvers
+                    if ((gameState.isTacticalGridOverlayEnabled || enemy.state == AIState.FLANKING) && enemy.activePath.isNotEmpty()) {
                         var prevPt = Offset(enemy.x, enemy.y)
+                        val pathColor = if (enemy.state == AIState.FLANKING) PlasmaPink.copy(alpha = 0.75f) else Color.Cyan.copy(alpha = 0.5f)
                         for (idx in enemy.activePathIndex until enemy.activePath.size) {
                             val pt = Offset(enemy.activePath[idx].first, enemy.activePath[idx].second)
                             drawLine(
-                                color = PlasmaPink.copy(alpha = 0.55f),
+                                color = pathColor,
                                 start = prevPt,
                                 end = pt,
-                                strokeWidth = 2f
+                                strokeWidth = if (enemy.state == AIState.FLANKING) 2.5f else 1.8f
                             )
                             drawCircle(
-                                color = PlasmaPink.copy(alpha = 0.7f),
-                                radius = 3f,
+                                color = pathColor,
+                                radius = if (enemy.state == AIState.FLANKING) 3.5f else 2.5f,
                                 center = pt
                             )
                             prevPt = pt
@@ -768,41 +770,62 @@ fun VoxelCanvas(
                     )
                 }
 
-                // Cover Snap Surface Contact Bar & Barrier Shield Arc
-                if (player.isCoverSnapped) {
+                // State-Based Cover Visuals: Barrier Arc, Contact Bar, and Tangent Guides
+                if (player.isCoverSnapped || player.movementState == PlayerMovementState.COVER_SNAPPED ||
+                    player.movementState == PlayerMovementState.COVER_TRAVERSING || player.movementState == PlayerMovementState.COVER_PEEKING) {
                     val nx = player.coverSnapNormalX
                     val ny = player.coverSnapNormalY
                     val tangentX = -ny
                     val tangentY = nx
 
                     // Contact Beam flush on voxel face
-                    val contactStartX = player.x - nx * 4f + tangentX * 18f
-                    val contactStartY = player.y - ny * 4f + tangentY * 18f
-                    val contactEndX = player.x - nx * 4f - tangentX * 18f
-                    val contactEndY = player.y - ny * 4f - tangentY * 18f
+                    val contactStartX = player.x - nx * 4f + tangentX * 20f
+                    val contactStartY = player.y - ny * 4f + tangentY * 20f
+                    val contactEndX = player.x - nx * 4f - tangentX * 20f
+                    val contactEndY = player.y - ny * 4f - tangentY * 20f
+
+                    val beamColor = when (player.movementState) {
+                        PlayerMovementState.COVER_PEEKING -> AmberAccent
+                        PlayerMovementState.COVER_TRAVERSING -> NanoCyan
+                        else -> NaniteGreen
+                    }
 
                     drawLine(
-                        color = NaniteGreen,
+                        color = beamColor,
                         start = Offset(contactStartX, contactStartY),
                         end = Offset(contactEndX, contactEndY),
-                        strokeWidth = 4f
+                        strokeWidth = 4.5f
                     )
                     drawLine(
-                        color = Color.White.copy(alpha = 0.8f),
+                        color = Color.White.copy(alpha = 0.85f),
                         start = Offset(contactStartX, contactStartY),
                         end = Offset(contactEndX, contactEndY),
                         strokeWidth = 2f
                     )
 
+                    // Traversing Guideline arrows along the cover face
+                    if (player.movementState == PlayerMovementState.COVER_TRAVERSING) {
+                        val slideDir = if (player.vx * tangentX + player.vy * tangentY >= 0) 1f else -1f
+                        val arrowTipX = player.x + tangentX * (28f * slideDir)
+                        val arrowTipY = player.y + tangentY * (28f * slideDir)
+                        drawLine(
+                            color = NanoCyan,
+                            start = Offset(player.x, player.y),
+                            end = Offset(arrowTipX, arrowTipY),
+                            strokeWidth = 3f
+                        )
+                    }
+
                     // Defensive Barrier Arc facing away from obstacle face
                     val awayAngleRad = atan2(-ny, -nx)
                     val awayAngleDeg = Math.toDegrees(awayAngleRad.toDouble()).toFloat()
-                    val pulseAlpha = 0.6f + sin(player.coverAnimPulse.toDouble()).toFloat() * 0.25f
+                    val pulseAlpha = 0.65f + sin(player.coverAnimPulse.toDouble()).toFloat() * 0.25f
 
+                    val arcAngle = if (player.movementState == PlayerMovementState.COVER_PEEKING) 70f else 125f
                     drawArc(
-                        color = NaniteGreen.copy(alpha = pulseAlpha),
-                        startAngle = awayAngleDeg - 60f,
-                        sweepAngle = 120f,
+                        color = beamColor.copy(alpha = pulseAlpha),
+                        startAngle = awayAngleDeg - arcAngle / 2f,
+                        sweepAngle = arcAngle,
                         useCenter = false,
                         topLeft = Offset(player.x - 24f, player.y - 24f),
                         size = Size(48f, 48f),
@@ -810,11 +833,28 @@ fun VoxelCanvas(
                     )
                 }
 
+                // Vaulting Motion Trail
+                if (player.isVaulting) {
+                    drawLine(
+                        color = NanoCyan.copy(alpha = 0.5f),
+                        start = Offset(player.vaultStartX, player.vaultStartY),
+                        end = Offset(player.vaultTargetX, player.vaultTargetY),
+                        strokeWidth = 3f
+                    )
+                    drawCircle(
+                        color = NanoCyan.copy(alpha = 0.4f),
+                        radius = 24f * (1f - player.vaultProgress),
+                        center = Offset(player.x, player.y)
+                    )
+                }
+
                 // Player Body
-                val playerColor = when (player.stance) {
-                    PlayerStance.STAND -> NanoCyan
-                    PlayerStance.CROUCH -> NanoCyanDim
-                    PlayerStance.PRONE -> NanoPurple
+                val playerColor = when {
+                    player.movementState == PlayerMovementState.COVER_VAULTING -> NanoCyan
+                    player.stance == PlayerStance.STAND -> NanoCyan
+                    player.stance == PlayerStance.CROUCH -> NanoCyanDim
+                    player.stance == PlayerStance.PRONE -> NanoPurple
+                    else -> NanoCyan
                 }
 
                 drawCircle(
@@ -824,10 +864,10 @@ fun VoxelCanvas(
                 )
                 if (player.isCoverSnapped) {
                     drawCircle(
-                        color = NaniteGreen,
+                        color = if (player.movementState == PlayerMovementState.COVER_PEEKING) AmberAccent else NaniteGreen,
                         radius = 21f,
                         center = Offset(player.x, player.y),
-                        style = Stroke(width = 2f)
+                        style = Stroke(width = 2.2f)
                     )
                 }
                 drawCircle(
@@ -844,19 +884,28 @@ fun VoxelCanvas(
                     strokeWidth = 4f
                 )
 
-                // Cover Indicator Badge
-                if (player.isBehindCover) {
-                    val coverTxt = if (player.isCoverSnapped) {
-                        "COVER LOCKED (${if (player.coverHeight == CoverHeight.HIGH) "90%" else "50%"})"
-                    } else {
-                        if (player.coverHeight == CoverHeight.HIGH) "HIGH COVER (90%)" else "LOW COVER (50%)"
+                // Cover & Hit Probability Indicator Badge
+                if (player.isBehindCover || player.isCoverSnapped || player.movementState == PlayerMovementState.COVER_VAULTING) {
+                    val pctEvade = ((1.0f - player.incomingHitProbability) * 100).toInt()
+                    val statePrefix = when (player.movementState) {
+                        PlayerMovementState.COVER_SNAPPED -> "SNAPPED"
+                        PlayerMovementState.COVER_TRAVERSING -> "TRAVERSING"
+                        PlayerMovementState.COVER_PEEKING -> "PEEKING"
+                        PlayerMovementState.COVER_VAULTING -> "VAULTING"
+                        else -> "COVER"
                     }
-                    val badgeColor = if (player.isCoverSnapped) NaniteGreen else NanoCyan
+                    val coverTxt = "$statePrefix: -$pctEvade% HIT"
+                    val badgeColor = when (player.movementState) {
+                        PlayerMovementState.COVER_PEEKING -> AmberAccent
+                        PlayerMovementState.COVER_TRAVERSING -> NanoCyan
+                        PlayerMovementState.COVER_VAULTING -> NanoCyan
+                        else -> NaniteGreen
+                    }
                     drawSafeText(
                         textMeasurer = textMeasurer,
                         text = coverTxt,
                         style = TextStyle(color = badgeColor, fontSize = 11.sp, fontWeight = FontWeight.Bold),
-                        topLeft = Offset(player.x - 42f, player.y - 38f)
+                        topLeft = Offset(player.x - 46f, player.y - 38f)
                     )
                 }
 
