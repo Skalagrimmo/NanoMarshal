@@ -7,9 +7,9 @@ import com.example.data.database.GadgetInventoryEntity
 import com.example.data.database.LevelProgressEntity
 import com.example.data.database.PlayerStatsEntity
 import com.example.data.database.WeaponInventoryEntity
-import com.example.data.model.Gadget
-import com.example.data.model.Mission
-import com.example.data.model.Weapon
+import com.example.nanomarshal.core.model.Gadget
+import com.example.nanomarshal.core.model.Mission
+import com.example.nanomarshal.core.model.Weapon
 import com.example.data.repository.GameRepository
 import com.example.data.repository.PlayerProfile
 import kotlinx.coroutines.flow.*

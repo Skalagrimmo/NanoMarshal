@@ -20,10 +20,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.model.*
-import com.example.engine.AudioIntensityCategory
-import com.example.engine.GameState
-import com.example.engine.StealthStatus
+import com.example.nanomarshal.core.model.*
+import com.example.nanomarshal.core.engine.AudioIntensityCategory
+import com.example.nanomarshal.core.engine.GameState
+import com.example.nanomarshal.core.engine.StealthStatus
 import com.example.ui.theme.*
 
 @Composable

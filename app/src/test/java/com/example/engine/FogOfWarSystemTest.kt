@@ -1,6 +1,6 @@
-package com.example.engine
+package com.example.nanomarshal.core.engine
 
-import com.example.data.model.*
+import com.example.nanomarshal.core.model.*
 import org.junit.Assert.*
 import org.junit.Test
 

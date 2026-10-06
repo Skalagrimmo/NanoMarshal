@@ -2,7 +2,7 @@ package com.example.data.repository
 
 import android.content.Context
 import com.example.data.database.*
-import com.example.data.model.*
+import com.example.nanomarshal.core.model.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*

@@ -32,11 +32,11 @@ import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.database.WeaponInventoryEntity
-import com.example.data.model.DefaultWeapons
-import com.example.data.model.Weapon
+import com.example.nanomarshal.core.model.DefaultWeapons
+import com.example.nanomarshal.core.model.Weapon
 import com.example.data.repository.GameRepository
 import com.example.data.repository.PlayerProfile
-import com.example.engine.SoundFX
+import com.example.nanomarshal.core.engine.SoundFX
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.cos
@@ -273,9 +273,9 @@ fun InteractiveWeaponUpgradeScreen(
                         ) {
                             Icon(
                                 imageVector = when (weapon.type) {
-                                    com.example.data.model.WeaponType.PLASMA_RIFLE -> Icons.Default.Bolt
-                                    com.example.data.model.WeaponType.PISTOL -> Icons.Default.GpsFixed
-                                    com.example.data.model.WeaponType.RAILGUN -> Icons.Default.ElectricBolt
+                                    com.example.nanomarshal.core.model.WeaponType.PLASMA_RIFLE -> Icons.Default.Bolt
+                                    com.example.nanomarshal.core.model.WeaponType.PISTOL -> Icons.Default.GpsFixed
+                                    com.example.nanomarshal.core.model.WeaponType.RAILGUN -> Icons.Default.ElectricBolt
                                     else -> Icons.Default.SportsEsports
                                 },
                                 contentDescription = weapon.name,

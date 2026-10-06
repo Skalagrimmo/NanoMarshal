@@ -15,10 +15,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.model.Mission
+import com.example.nanomarshal.core.model.Mission
 import com.example.data.repository.GameRepository
 import com.example.data.repository.PlayerProfile
-import com.example.engine.GameEngine
+import com.example.nanomarshal.core.engine.GameEngine
 import com.example.ui.components.TacticalHUD
 import com.example.ui.components.VoxelCanvas
 import com.example.ui.theme.*

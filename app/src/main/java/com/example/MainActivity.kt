@@ -8,8 +8,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import com.example.data.model.DefaultMissions
-import com.example.data.model.Mission
+import com.example.nanomarshal.core.model.DefaultMissions
+import com.example.nanomarshal.core.model.Mission
 import com.example.data.repository.GameRepository
 import com.example.ui.screens.*
 import com.example.ui.theme.NanoMarshalTheme

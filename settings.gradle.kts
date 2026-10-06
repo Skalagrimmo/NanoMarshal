@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "NanoMarshal"
 
 include(":app")
+include(":nanomarshal-core")

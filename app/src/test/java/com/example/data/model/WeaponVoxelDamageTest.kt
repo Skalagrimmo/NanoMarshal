@@ -1,7 +1,7 @@
-package com.example.data.model
+package com.example.nanomarshal.core.model
 
-import com.example.engine.DestructibleVoxelBlock
-import com.example.engine.Voxel3DCell
+import com.example.nanomarshal.core.engine.DestructibleVoxelBlock
+import com.example.nanomarshal.core.engine.Voxel3DCell
 import org.junit.Assert.*
 import org.junit.Test
 

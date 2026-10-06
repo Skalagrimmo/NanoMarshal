@@ -20,14 +20,14 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.model.*
-import com.example.engine.GaussianElimination
-import com.example.engine.GameState
-import com.example.engine.OpenGlVboRenderer
-import com.example.engine.StealthStatus
-import com.example.engine.VoronoiDiagram
-import com.example.engine.VoxelMaterialShader
-import com.example.engine.VoxelTerrain
+import com.example.nanomarshal.core.model.*
+import com.example.nanomarshal.core.engine.GaussianElimination
+import com.example.nanomarshal.core.engine.GameState
+import com.example.nanomarshal.core.engine.OpenGlVboRenderer
+import com.example.nanomarshal.core.engine.StealthStatus
+import com.example.nanomarshal.core.engine.VoronoiDiagram
+import com.example.nanomarshal.core.engine.VoxelMaterialShader
+import com.example.nanomarshal.core.engine.VoxelTerrain
 import com.example.ui.theme.*
 import kotlin.math.*
 import kotlin.random.Random
@@ -81,10 +81,11 @@ fun VoxelCanvas(
             )
 
             // 1b. Render Voronoi Diagram Tactical Territory Cells & OpenGL VBO Buffer Stream with Nanopunk GLSL Shaders
-            if (gameState.isTacticalGridOverlayEnabled && gameState.voronoiDiagram != null) {
+            val voronoiDiagram = gameState.voronoiDiagram
+            if (gameState.isTacticalGridOverlayEnabled && voronoiDiagram != null) {
                 val animTimeSec = (System.currentTimeMillis() % 100000L) / 1000f
                 openGlVboRenderer.beginFrame()
-                openGlVboRenderer.pushVoronoiDiagram(gameState.voronoiDiagram)
+                openGlVboRenderer.pushVoronoiDiagram(voronoiDiagram)
                 openGlVboRenderer.drawVboBridgeToCanvas(
                     drawScope = this,
                     timeSec = animTimeSec,
@@ -647,7 +648,7 @@ fun VoxelCanvas(
             // Render HUD Interaction Reticles for nearby Hazards
             for (h in gameState.activeHazards) {
                 val dist = hypot(h.worldX - player.x, h.worldY - player.y)
-                if (dist <= 160f && h.status == com.example.engine.HazardStatus.DORMANT) {
+                if (dist <= 160f && h.status == com.example.nanomarshal.core.engine.HazardStatus.DORMANT) {
                     val pAlpha = (sin(h.pulsePhase.toDouble()) * 0.3 + 0.7).toFloat()
                     val col = Color(h.type.baseColorHex)
                     drawCircle(
@@ -662,7 +663,7 @@ fun VoxelCanvas(
                         style = TextStyle(color = col, fontSize = 9.sp, fontWeight = FontWeight.Bold),
                         topLeft = Offset(h.worldX - 22f, h.worldY - 34f)
                     )
-                } else if (h.status == com.example.engine.HazardStatus.CHARGING) {
+                } else if (h.status == com.example.nanomarshal.core.engine.HazardStatus.CHARGING) {
                     // Critical Reactor Countdown warning
                     drawCircle(
                         color = Color(0xFFFF5500),

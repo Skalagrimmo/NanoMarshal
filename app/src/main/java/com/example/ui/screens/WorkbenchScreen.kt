@@ -19,9 +19,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.database.WeaponInventoryEntity
-import com.example.data.model.DefaultGadgets
-import com.example.data.model.DefaultWeapons
-import com.example.data.model.Weapon
+import com.example.nanomarshal.core.model.DefaultGadgets
+import com.example.nanomarshal.core.model.DefaultWeapons
+import com.example.nanomarshal.core.model.Weapon
 import com.example.data.repository.GameRepository
 import com.example.data.repository.PlayerProfile
 import com.example.ui.theme.*
