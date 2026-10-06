@@ -38,6 +38,7 @@ data class ThrowableItem(
 )
 
 data class GameState(
+    val semanticState: TacticalSemanticState = TacticalSemanticState(),
     val player: PlayerState = PlayerState(),
     val squadMembers: List<SquadMember> = emptyList(),
     val enemies: List<Enemy> = emptyList(),
@@ -78,10 +79,14 @@ data class GameState(
 )
 
 class GameEngine(
-    val mission: Mission
+    val mission: Mission,
+    private val semanticEventHandlers: SemanticTacticalEventHandlerRegistry =
+        SemanticTacticalEventHandlerRegistry.default()
 ) {
     private val semanticEventLog = LinkedHashMap<String, SemanticTacticalEvent>()
     private val maxSemanticEventLogSize = 64
+    private var semanticTacticalState = TacticalSemanticState()
+    private var lastSemanticEventRevision = -1L
 
     /**
      * Accepts already-authorized objective-world events at the tactical boundary.
@@ -90,6 +95,8 @@ class GameEngine(
      * to the objective world and does not silently mutate semantic truth.
      */
     fun applyWorldEvents(events: List<SemanticTacticalEvent>) {
+        if (events.isEmpty()) return
+
         events.forEach { event ->
             require(event.eventId.isNotBlank()) {
                 "Semantic event id must not be blank"
@@ -104,11 +111,33 @@ class GameEngine(
                 "Semantic event kind must not be blank"
             }
 
+            val previous = semanticEventLog[event.eventId]
+            if (previous != null) {
+                require(previous == event) {
+                    "Semantic event id was reused with different content"
+                }
+                return@forEach
+            }
+
+            require(event.revision >= lastSemanticEventRevision) {
+                "Semantic event revision must not move backwards"
+            }
+
             semanticEventLog[event.eventId] = event
+            lastSemanticEventRevision = event.revision
+            semanticTacticalState = semanticEventHandlers.handle(
+                event = event,
+                current = semanticTacticalState
+            )
+
             while (semanticEventLog.size > maxSemanticEventLogSize) {
                 semanticEventLog.remove(semanticEventLog.entries.first().key)
             }
         }
+
+        _gameState.value = _gameState.value.copy(
+            semanticState = semanticTacticalState
+        )
     }
 
     fun semanticEventLog(): List<SemanticTacticalEvent> =
@@ -142,6 +171,10 @@ class GameEngine(
     }
 
     fun initMission() {
+        semanticEventLog.clear()
+        semanticTacticalState = TacticalSemanticState()
+        lastSemanticEventRevision = -1L
+
         worldManager.initializeWorld(mission.id, worldSeed = mission.id.hashCode().toLong())
         projectileManager.clear()
 
@@ -231,6 +264,7 @@ class GameEngine(
         val defaultSquad = DefaultSquad.createDefaultSquad(terrain.spawnPointX, terrain.spawnPointY)
 
         _gameState.value = GameState(
+            semanticState = semanticTacticalState,
             player = p,
             squadMembers = defaultSquad,
             enemies = enemyList,
