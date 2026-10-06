@@ -20,6 +20,7 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.max
 import kotlin.random.Random
 
 /**
@@ -215,7 +216,8 @@ class EnemyAI(
         bullets: MutableList<Bullet>,
         particles: MutableList<Particle>,
         now: Long,
-        deltaSec: Float
+        deltaSec: Float,
+        semanticState: TacticalSemanticState = TacticalSemanticState()
     ): EnemyAIActions {
         val spawnedBullets = mutableListOf<Bullet>()
         val spawnedParticles = mutableListOf<Particle>()
@@ -242,8 +244,19 @@ class EnemyAI(
             val coverSpotCandidates = findBestCoverSpots(e.x, e.y, player.x, player.y)
             val bestCover = coverSpotCandidates.firstOrNull()
 
+            // Semantic world pressure raises a bounded local alert floor.
+            e.alertLevel = max(
+                e.alertLevel,
+                semanticState.toPerceptionModifiers().alertFloor
+            )
+
             // Perception snapshot evaluated via FSM Controller
-            val perception = fsmController.evaluatePerception(e, player, bestCover)
+            val perception = fsmController.evaluatePerception(
+                enemy = e,
+                player = player,
+                bestCover = bestCover,
+                semanticState = semanticState
+            )
 
             if (perception.canSeePlayer || perception.canHearPlayer) {
                 e.lastKnownPlayerX = player.x

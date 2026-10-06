@@ -66,8 +66,13 @@ class EnemyFSMController(
     fun evaluatePerception(
         enemy: Enemy,
         player: PlayerState,
-        bestCover: CoverSpotCandidate?
+        bestCover: CoverSpotCandidate?,
+        semanticState: TacticalSemanticState = TacticalSemanticState()
     ): PerceptionSnapshot {
+        val semanticModifiers = semanticState.toPerceptionModifiers()
+        val effectiveVisionRange = enemy.visionRange * semanticModifiers.visionMultiplier
+        val effectiveHearingRadius = player.stealthNoiseRadius * semanticModifiers.hearingMultiplier
+
         val dx = player.x - enemy.x
         val dy = player.y - enemy.y
         val distToPlayer = sqrt(dx * dx + dy * dy)
@@ -75,7 +80,7 @@ class EnemyFSMController(
 
         // Vision Cone Check
         val angleDiff = abs(angleToPlayer - enemy.facingAngle)
-        val inVisionCone = distToPlayer < enemy.visionRange && angleDiff < (enemy.visionAngleRad / 2f)
+        val inVisionCone = distToPlayer < effectiveVisionRange && angleDiff < (enemy.visionAngleRad / 2f)
 
         // 3D Voxel Raycast Line-Of-Sight Check
         val hasLOS = if (inVisionCone) {
@@ -85,7 +90,7 @@ class EnemyFSMController(
         }
 
         val canSeePlayer = inVisionCone && hasLOS
-        val canHearPlayer = distToPlayer < player.stealthNoiseRadius
+        val canHearPlayer = distToPlayer < effectiveHearingRadius
 
         val proximity = when {
             distToPlayer < 150f -> ProximityCategory.CLOSE

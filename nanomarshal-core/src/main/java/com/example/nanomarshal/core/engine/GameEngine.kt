@@ -1318,7 +1318,15 @@ class GameEngine(
         now: Long,
         deltaSec: Float
     ) {
-        val actions = enemyAI.updateEnemyAI(enemies, player, bullets, particles, now, deltaSec)
+        val actions = enemyAI.updateEnemyAI(
+            enemies = enemies,
+            player = player,
+            bullets = bullets,
+            particles = particles,
+            now = now,
+            deltaSec = deltaSec,
+            semanticState = semanticTacticalState
+        )
         for (flash in actions.muzzleFlashes) {
             spawnMuzzleFlashLight(flash.first, flash.second, color = Color(0xFFEF4444))
         }
