@@ -80,6 +80,40 @@ data class GameState(
 class GameEngine(
     val mission: Mission
 ) {
+    private val semanticEventLog = LinkedHashMap<String, SemanticTacticalEvent>()
+    private val maxSemanticEventLogSize = 64
+
+    /**
+     * Accepts already-authorized objective-world events at the tactical boundary.
+     *
+     * This is an intake boundary only: event acceptance does not grant write access
+     * to the objective world and does not silently mutate semantic truth.
+     */
+    fun applyWorldEvents(events: List<SemanticTacticalEvent>) {
+        events.forEach { event ->
+            require(event.eventId.isNotBlank()) {
+                "Semantic event id must not be blank"
+            }
+            require(event.worldId == mission.id) {
+                "Semantic event world id must match tactical mission id"
+            }
+            require(event.revision >= 0L) {
+                "Semantic event revision must be non-negative"
+            }
+            require(event.kind.isNotBlank()) {
+                "Semantic event kind must not be blank"
+            }
+
+            semanticEventLog[event.eventId] = event
+            while (semanticEventLog.size > maxSemanticEventLogSize) {
+                semanticEventLog.remove(semanticEventLog.entries.first().key)
+            }
+        }
+    }
+
+    fun semanticEventLog(): List<SemanticTacticalEvent> =
+        semanticEventLog.values.toList()
+
     val worldManager = VoxelWorldManager(width = mission.gridWidth, height = mission.gridHeight, maxDepth = 5, tileSize = 64f)
     private val spatialGrid = SpatialGrid(worldWidth = mission.gridWidth * 64f, worldHeight = mission.gridHeight * 64f, cellSize = 64f)
     val projectileManager = ProjectileManager(worldManager = worldManager, terrain = worldManager.terrain, spatialGrid = spatialGrid)
