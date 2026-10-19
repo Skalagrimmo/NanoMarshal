@@ -136,4 +136,9 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+
+  // The Go A* library is optional until scripts/build-go-core.sh has generated it.
+  if (file("libs/nanomarshalcore.aar").exists()) {
+    implementation(files("libs/nanomarshalcore.aar"))
+  }
 }
