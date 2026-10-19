@@ -84,6 +84,45 @@ object VoxelPathfinder {
             return listOf(Pair(worldX, worldY))
         }
 
+        // Prefer the Go A* implementation when its optional gomobile AAR is installed.
+        // Terrain semantics and traversal costs remain in Kotlin during this first migration step.
+        if (GoPathfinderBridge.isAvailable) {
+            val gridCosts = FloatArray(width * height)
+            for (gy in 0 until height) {
+                for (gx in 0 until width) {
+                    val idx = gy * width + gx
+                    gridCosts[idx] = if (isSolidObstacle(terrain, gx, gy)) {
+                        0f
+                    } else {
+                        calculateTileCost(terrain, gx, gy, isFlanking, playerState)
+                    }
+                }
+            }
+
+            val goPath = GoPathfinderBridge.findPath(
+                width = width,
+                height = height,
+                startX = clampedStartGx,
+                startY = clampedStartGy,
+                targetX = clampedTargetGx,
+                targetY = clampedTargetGy,
+                costs = gridCosts
+            )
+            if (goPath != null) {
+                val worldPath = ArrayList<Pair<Float, Float>>(goPath.size / 2)
+                for (i in goPath.indices step 2) {
+                    if (i + 1 >= goPath.size) break
+                    worldPath.add(
+                        Pair(
+                            (goPath[i] + 0.5f) * terrain.tileSize,
+                            (goPath[i + 1] + 0.5f) * terrain.tileSize
+                        )
+                    )
+                }
+                if (worldPath.isNotEmpty()) return worldPath
+            }
+        }
+
         val openSet = PriorityQueue<Node>()
         val closedSet = HashSet<Pair<Int, Int>>()
         val gScores = HashMap<Pair<Int, Int>, Float>()
